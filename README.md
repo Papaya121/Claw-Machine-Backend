@@ -29,6 +29,9 @@ Backend for a claw machine game where the server is authoritative for economy an
 - `TELEGRAM_INIT_DATA_TTL_SEC` (default `120`)
 - `DEV_AUTH_ENABLED` (`true/false`, default `true`)
 - `DEV_AUTH_USER_PREFIX` (default `dev`)
+- `AUTH_DISABLED` (`true/false`, default `false`) - bypass all `AuthGuard` checks (local dev only)
+- `AUTH_DISABLED_USER_ID` (default `noauth-user`) - forced user id when `AUTH_DISABLED=true`
+- `AUTH_DISABLED_TELEGRAM_USER_ID` (default `dev:noauth-user`) - forced telegram user id when `AUTH_DISABLED=true`
 - `ATTEMPT_TOKEN_SECRET`
 - `ATTEMPT_TTL_SEC` (default `300`)
 - `INPUT_RATE_LIMIT_PER_SEC` (default `30`)
@@ -76,3 +79,11 @@ Only rewards seed:
 - Runtime storage in this MVP is in-memory (`InMemoryDatabaseService`).
 - PostgreSQL schema is provided in `migrations/*.sql` and maps to the documented production model.
 - Local physics on client should be visual-only; server decides final result and reward durability.
+- Temporary no-auth mode for Mini App testing:
+
+```bash
+export AUTH_DISABLED=true
+npm run start:dev
+```
+
+Use only in local/dev environments.
