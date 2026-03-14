@@ -86,4 +86,8 @@ export AUTH_DISABLED=true
 npm run start:dev
 ```
 
+When `AUTH_DISABLED=true`:
+- guarded endpoints do not require `Authorization: Bearer ...`;
+- `POST /v1/auth/telegram` skips signature validation and returns token for `AUTH_DISABLED_TELEGRAM_USER_ID`.
+
 Use only in local/dev environments.

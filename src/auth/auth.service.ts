@@ -14,6 +14,11 @@ import { TelegramAuthService } from './telegram-auth.service';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly devAuthEnabled = getEnvBool('DEV_AUTH_ENABLED', true);
+  private readonly authDisabled = getEnvBool('AUTH_DISABLED', false);
+  private readonly authDisabledTelegramUserId = getEnvString(
+    'AUTH_DISABLED_TELEGRAM_USER_ID',
+    'dev:noauth-user',
+  );
   private readonly devAuthUserPrefix = getEnvString(
     'DEV_AUTH_USER_PREFIX',
     'dev',
@@ -31,6 +36,16 @@ export class AuthService {
     expiresInSec: number;
     user: { id: string; telegramUserId: string };
   } {
+    if (this.authDisabled) {
+      this.logger.warn(
+        `AUTH_DISABLED=true: skipping Telegram signature check for /v1/auth/telegram (tgUser=${this.authDisabledTelegramUserId})`,
+      );
+      return this.issueAccessTokenForTelegramUserId(
+        this.authDisabledTelegramUserId,
+        'auth.telegram.bypass.success',
+      );
+    }
+
     if (!initData) {
       this.logger.warn('Auth rejected: empty initData');
       throw new BadRequestException('initData is required');
@@ -46,25 +61,10 @@ export class AuthService {
       `User authenticated userId=${user.id} tgUser=${user.telegramUserId}`,
     );
 
-    const token = this.tokenService.issueAccessToken({
-      id: user.id,
-      telegramUserId: user.telegramUserId,
-    });
-
-    this.auditService.log(
+    return this.issueAccessTokenForTelegramUserId(
+      user.telegramUserId,
       'auth.telegram.success',
-      { telegramUserId: user.telegramUserId },
-      user.id,
     );
-
-    return {
-      accessToken: token.token,
-      expiresInSec: token.expiresInSec,
-      user: {
-        id: user.id,
-        telegramUserId: user.telegramUserId,
-      },
-    };
   }
 
   authenticateDev(devUserId: string): {
@@ -79,30 +79,12 @@ export class AuthService {
 
     const normalized = this.normalizeDevUserId(devUserId);
     const telegramUserId = `${this.devAuthUserPrefix}:${normalized}`;
-    const user = this.usersService.getOrCreateByTelegramUserId(telegramUserId);
-    this.logger.log(
-      `Development auth success userId=${user.id} devUserId=${normalized}`,
-    );
-
-    const token = this.tokenService.issueAccessToken({
-      id: user.id,
-      telegramUserId: user.telegramUserId,
-    });
-
-    this.auditService.log(
+    this.logger.log(`Development auth success devUserId=${normalized}`);
+    return this.issueAccessTokenForTelegramUserId(
+      telegramUserId,
       'auth.dev.success',
       { devUserId: normalized },
-      user.id,
     );
-
-    return {
-      accessToken: token.token,
-      expiresInSec: token.expiresInSec,
-      user: {
-        id: user.id,
-        telegramUserId: user.telegramUserId,
-      },
-    };
   }
 
   private normalizeDevUserId(rawValue: string): string {
@@ -119,5 +101,39 @@ export class AuthService {
       .slice(0, 64);
 
     return normalized.length ? normalized : fallback;
+  }
+
+  private issueAccessTokenForTelegramUserId(
+    telegramUserId: string,
+    auditEventType: string,
+    extraAuditPayload?: Record<string, unknown>,
+  ): {
+    accessToken: string;
+    expiresInSec: number;
+    user: { id: string; telegramUserId: string };
+  } {
+    const user = this.usersService.getOrCreateByTelegramUserId(telegramUserId);
+    const token = this.tokenService.issueAccessToken({
+      id: user.id,
+      telegramUserId: user.telegramUserId,
+    });
+
+    this.auditService.log(
+      auditEventType,
+      {
+        telegramUserId: user.telegramUserId,
+        ...(extraAuditPayload || {}),
+      },
+      user.id,
+    );
+
+    return {
+      accessToken: token.token,
+      expiresInSec: token.expiresInSec,
+      user: {
+        id: user.id,
+        telegramUserId: user.telegramUserId,
+      },
+    };
   }
 }
