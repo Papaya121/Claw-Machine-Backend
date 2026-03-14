@@ -1,0 +1,490 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import type {
+  Attempt,
+  AttemptInput,
+  AttemptResult,
+  AuthUserContext,
+} from '../common/domain.types';
+import { randomHex, sha256Hex } from '../common/crypto.util';
+import { getEnvInt } from '../common/env';
+import { IdempotencyService } from '../common/idempotency.service';
+import { AuditService } from '../audit/audit.service';
+import { AntiCheatService } from '../anti-cheat/anti-cheat.service';
+import { MachineConfigService } from '../config/machine-config.service';
+import { RewardService } from '../reward/reward.service';
+import { InMemoryDatabaseService } from '../storage/in-memory-database.service';
+import { TokenService } from '../auth/token.service';
+import { WalletService } from '../wallet/wallet.service';
+import { ReplayResolverService } from './replay-resolver.service';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+@Injectable()
+export class AttemptService {
+  private readonly logger = new Logger(AttemptService.name);
+
+  private readonly inputRateLimitPerSec = getEnvInt(
+    'INPUT_RATE_LIMIT_PER_SEC',
+    30,
+  );
+
+  private readonly attemptTtlSec = getEnvInt('ATTEMPT_TTL_SEC', 60 * 5);
+
+  constructor(
+    private readonly db: InMemoryDatabaseService,
+    private readonly walletService: WalletService,
+    private readonly idempotency: IdempotencyService,
+    private readonly tokenService: TokenService,
+    private readonly configService: MachineConfigService,
+    private readonly auditService: AuditService,
+    private readonly antiCheatService: AntiCheatService,
+    private readonly replayResolver: ReplayResolverService,
+    private readonly rewardService: RewardService,
+  ) {}
+
+  async startAttempt(
+    user: AuthUserContext,
+    idempotencyKey: string,
+    body: { machineId?: string; clientBuild?: string; configVersion?: string },
+  ): Promise<{
+    attemptId: string;
+    attemptToken: string;
+    serverNowMs: number;
+    inputWindowMs: number;
+    economySnapshot: { ticketsLeft: number };
+  }> {
+    const machineId = (body.machineId || '').trim();
+    const clientBuild = (body.clientBuild || '').trim();
+    const configVersion = (body.configVersion || '').trim();
+    this.logger.log(
+      `Start attempt requested userId=${user.id} machineId=${machineId} configVersion=${configVersion}`,
+    );
+
+    if (!machineId || !clientBuild || !configVersion) {
+      this.logger.warn(
+        `Start attempt rejected for userId=${user.id}: missing required fields`,
+      );
+      throw new BadRequestException(
+        'machineId, clientBuild and configVersion are required',
+      );
+    }
+
+    return this.idempotency.run(
+      `attempt:start:${user.id}`,
+      idempotencyKey,
+      { machineId, clientBuild, configVersion },
+      () => {
+        this.logger.debug(
+          `Start attempt idempotency miss userId=${user.id} idem=${idempotencyKey}`,
+        );
+        const config = this.configService.get(configVersion);
+        const wallet = this.walletService.debitTicket(user.id);
+
+        const seedReveal = randomHex(32);
+        const attempt: Attempt = {
+          id: randomUUID(),
+          userId: user.id,
+          status: 'started',
+          configVersion,
+          seedHash: sha256Hex(seedReveal),
+          seedReveal: null,
+          startedAt: Date.now(),
+          resolvedAt: null,
+          expiresAt: Date.now() + this.attemptTtlSec * 1000,
+          riskScore: 0,
+          result: null,
+          rewardId: null,
+          machineId,
+          clientBuild,
+        };
+
+        this.db.attempts.set(attempt.id, attempt);
+        this.db.attemptInputs.set(attempt.id, []);
+        this.logger.log(
+          `Attempt started attemptId=${attempt.id} userId=${user.id} ticketsLeft=${wallet.tickets}`,
+        );
+
+        this.auditService.log(
+          'attempt.started',
+          {
+            machineId,
+            clientBuild,
+            configVersion,
+            seedHash: attempt.seedHash,
+          },
+          user.id,
+          attempt.id,
+        );
+
+        return {
+          attemptId: attempt.id,
+          attemptToken: this.tokenService.issueAttemptToken(
+            user.id,
+            attempt.id,
+          ),
+          serverNowMs: Date.now(),
+          inputWindowMs: config.inputWindowMs,
+          economySnapshot: {
+            ticketsLeft: wallet.tickets,
+          },
+        };
+      },
+    );
+  }
+
+  ingestInputs(
+    user: AuthUserContext,
+    attemptId: string,
+    attemptToken: string | undefined,
+    body: {
+      packets?: Array<{
+        seq: number;
+        clientTimeMs: number;
+        moveX: number;
+        moveY: number;
+      }>;
+    },
+  ): {
+    acceptedSeqUpTo: number;
+    serverNowMs: number;
+    warnings: string[];
+  } {
+    this.logger.log(
+      `Ingest inputs requested userId=${user.id} attemptId=${attemptId} packets=${body.packets?.length ?? 0}`,
+    );
+    if (!attemptToken) {
+      this.logger.warn(
+        `Ingest inputs rejected userId=${user.id} attemptId=${attemptId}: missing attempt token`,
+      );
+      throw new ForbiddenException('X-Attempt-Token header is required');
+    }
+
+    const attempt = this.getUserAttempt(user.id, attemptId);
+    if (
+      attempt.status === 'resolved' ||
+      attempt.status === 'claimed' ||
+      attempt.status === 'cancelled'
+    ) {
+      this.logger.warn(
+        `Ingest inputs rejected attemptId=${attemptId}: status=${attempt.status}`,
+      );
+      throw new BadRequestException('Attempt no longer accepts inputs');
+    }
+
+    this.tokenService.verifyAttemptToken(attemptToken, user.id, attemptId);
+
+    const packets = body.packets || [];
+    const sorted = [...packets].sort((a, b) => a.seq - b.seq);
+    const existing = this.db.attemptInputs.get(attemptId) || [];
+    const acc = this.antiCheatService.newAccumulator();
+
+    let acceptedSeq = existing.length ? existing[existing.length - 1].seq : 0;
+    const existingSeqs = new Set(existing.map((input) => input.seq));
+
+    for (const packet of sorted) {
+      if (!Number.isInteger(packet.seq) || packet.seq < 1) {
+        throw new BadRequestException('seq must be positive integer');
+      }
+      if (!Number.isFinite(packet.clientTimeMs)) {
+        throw new BadRequestException('clientTimeMs must be number');
+      }
+      if (!Number.isFinite(packet.moveX) || !Number.isFinite(packet.moveY)) {
+        throw new BadRequestException('moveX/moveY must be numbers');
+      }
+
+      this.antiCheatService.applyInputChecks(
+        acc,
+        attempt,
+        existing,
+        packet,
+        Date.now(),
+        this.inputRateLimitPerSec,
+      );
+
+      if (existingSeqs.has(packet.seq)) {
+        acc.warnings.push(`Duplicate seq ${packet.seq} ignored`);
+        this.logger.debug(
+          `Duplicate packet ignored attemptId=${attemptId} seq=${packet.seq}`,
+        );
+        continue;
+      }
+
+      const normalized: AttemptInput = {
+        attemptId,
+        seq: packet.seq,
+        clientTimeMs: packet.clientTimeMs,
+        dirX: clamp(packet.moveX, -1, 1),
+        dirY: clamp(packet.moveY, -1, 1),
+        receivedAt: Date.now(),
+      };
+
+      existing.push(normalized);
+      existingSeqs.add(packet.seq);
+      acceptedSeq = Math.max(acceptedSeq, packet.seq);
+    }
+
+    this.db.attemptInputs.set(
+      attemptId,
+      existing.sort((a, b) => a.seq - b.seq),
+    );
+
+    if (attempt.status === 'started') {
+      this.db.attempts.set(attempt.id, {
+        ...attempt,
+        status: 'inputs_closed',
+        riskScore: attempt.riskScore + acc.riskScore,
+      });
+    }
+
+    this.antiCheatService.persistFlags(acc);
+    this.logger.log(
+      `Inputs ingested attemptId=${attemptId} acceptedSeqUpTo=${acceptedSeq} riskIncrement=${acc.riskScore} warnings=${acc.warnings.length}`,
+    );
+
+    this.auditService.log(
+      'attempt.inputs_ingested',
+      {
+        acceptedSeq,
+        packetCount: packets.length,
+        warnings: acc.warnings,
+        riskIncrement: acc.riskScore,
+      },
+      user.id,
+      attempt.id,
+    );
+
+    return {
+      acceptedSeqUpTo: acceptedSeq,
+      serverNowMs: Date.now(),
+      warnings: acc.warnings,
+    };
+  }
+
+  async resolveAttempt(
+    user: AuthUserContext,
+    attemptId: string,
+    attemptToken: string | undefined,
+    idempotencyKey: string,
+    body: {
+      clientSummary?: {
+        pressTimeMs?: number;
+        closeStartMs?: number;
+        contactHints?: Array<{ toyHintId: string; fingers: number }>;
+      };
+    },
+  ): Promise<{
+    attemptId: string;
+    status: 'resolved';
+    result: AttemptResult;
+    reward?: { id: string; code: string; rarity: string };
+    seedReveal?: string;
+    riskScore: number;
+  }> {
+    this.logger.log(
+      `Resolve requested userId=${user.id} attemptId=${attemptId} idem=${idempotencyKey}`,
+    );
+    if (!attemptToken) {
+      this.logger.warn(
+        `Resolve rejected userId=${user.id} attemptId=${attemptId}: missing attempt token`,
+      );
+      throw new ForbiddenException('X-Attempt-Token header is required');
+    }
+
+    const summary = body.clientSummary;
+    if (!summary || !Number.isFinite(summary.pressTimeMs)) {
+      this.logger.warn(
+        `Resolve rejected userId=${user.id} attemptId=${attemptId}: invalid clientSummary`,
+      );
+      throw new BadRequestException('clientSummary.pressTimeMs is required');
+    }
+
+    return this.idempotency.run(
+      `attempt:resolve:${user.id}:${attemptId}`,
+      idempotencyKey,
+      body,
+      () => {
+        const attempt = this.getUserAttempt(user.id, attemptId);
+        this.logger.debug(
+          `Resolve started attemptId=${attemptId} status=${attempt.status}`,
+        );
+        this.tokenService.verifyAttemptToken(attemptToken, user.id, attemptId);
+
+        if (attempt.status === 'resolved' || attempt.status === 'claimed') {
+          this.logger.log(
+            `Resolve returned cached state attemptId=${attemptId} status=${attempt.status}`,
+          );
+          return this.buildResolveResponse(attempt);
+        }
+
+        if (Date.now() > attempt.expiresAt) {
+          this.logger.warn(`Resolve expired attemptId=${attemptId}`);
+          const expired = {
+            ...attempt,
+            status: 'cancelled' as const,
+            result: 'void' as const,
+            resolvedAt: Date.now(),
+            seedReveal: randomHex(32),
+          };
+          this.db.attempts.set(expired.id, expired);
+          return this.buildResolveResponse(expired);
+        }
+
+        const config = this.configService.get(attempt.configVersion);
+        const inputs = this.db.attemptInputs.get(attempt.id) || [];
+        const acc = this.antiCheatService.newAccumulator();
+
+        const replay = this.replayResolver.replay(config, inputs, {
+          pressTimeMs: summary.pressTimeMs ?? 0,
+          closeStartMs: summary.closeStartMs,
+        });
+
+        const recentAttempts = [...this.db.attempts.values()]
+          .filter(
+            (candidate) =>
+              candidate.userId === user.id && candidate.result !== null,
+          )
+          .sort((a, b) => b.startedAt - a.startedAt)
+          .slice(0, 20);
+
+        const wins = recentAttempts.filter(
+          (candidate) => candidate.result === 'win',
+        ).length;
+        const recentWinRate =
+          recentAttempts.length > 0 ? wins / recentAttempts.length : 0;
+
+        this.antiCheatService.applyBehaviorChecks(acc, attempt, {
+          repeatedPrecisionBin: replay.repeatedPrecisionBin,
+          recentWinRate,
+          lockedPhaseMovement: replay.lockedPhaseMovement,
+        });
+
+        const totalRisk = attempt.riskScore + acc.riskScore;
+        const seedReveal = randomHex(32);
+        const outcome = this.replayResolver.resolveOutcome(
+          config,
+          replay,
+          seedReveal,
+          totalRisk,
+        );
+        const resolvedResult: AttemptResult = outcome.result;
+        this.logger.log(
+          `Resolve computed attemptId=${attemptId} result=${resolvedResult} riskScore=${totalRisk} chance=${outcome.chance}`,
+        );
+
+        let rewardPayload:
+          | { id: string; code: string; rarity: string }
+          | undefined;
+        let rewardId: string | null = null;
+
+        if (outcome.result === 'win') {
+          const reward = this.rewardService.pickWeightedReward(
+            this.replayResolver.randomForReward(seedReveal),
+          );
+          rewardId = reward.id;
+          rewardPayload = {
+            id: reward.id,
+            code: reward.code,
+            rarity: reward.rarity,
+          };
+          this.rewardService.ensureGrantForWin(attempt, reward.id);
+          this.logger.log(
+            `Resolve produced win attemptId=${attemptId} rewardId=${reward.id}`,
+          );
+        }
+
+        const resolved: Attempt = {
+          ...attempt,
+          status: 'resolved',
+          riskScore: totalRisk,
+          resolvedAt: Date.now(),
+          result: resolvedResult,
+          rewardId,
+          seedReveal,
+        };
+
+        this.db.attempts.set(attempt.id, resolved);
+
+        this.antiCheatService.persistFlags(acc);
+        this.logger.debug(
+          `Resolve anti-cheat persisted attemptId=${attemptId} flags=${acc.flags.length}`,
+        );
+
+        this.auditService.log(
+          'attempt.resolved',
+          {
+            result: resolved.result,
+            riskScore: resolved.riskScore,
+            chance: outcome.chance,
+            rewardRoll: outcome.rewardRoll,
+            rewardId: resolved.rewardId,
+            replay,
+          },
+          user.id,
+          attempt.id,
+        );
+
+        return {
+          attemptId: resolved.id,
+          status: 'resolved' as const,
+          result: resolvedResult,
+          reward: rewardPayload,
+          seedReveal: resolved.seedReveal ?? undefined,
+          riskScore: resolved.riskScore,
+        };
+      },
+    );
+  }
+
+  private getUserAttempt(userId: string, attemptId: string): Attempt {
+    const attempt = this.db.attempts.get(attemptId);
+    if (!attempt) {
+      this.logger.warn(`Attempt not found attemptId=${attemptId}`);
+      throw new NotFoundException('Attempt not found');
+    }
+    if (attempt.userId !== userId) {
+      this.logger.warn(
+        `Attempt access denied attemptId=${attemptId} owner=${attempt.userId} caller=${userId}`,
+      );
+      throw new ForbiddenException('Attempt belongs to another user');
+    }
+    return attempt;
+  }
+
+  private buildResolveResponse(attempt: Attempt): {
+    attemptId: string;
+    status: 'resolved';
+    result: AttemptResult;
+    reward?: { id: string; code: string; rarity: string };
+    seedReveal?: string;
+    riskScore: number;
+  } {
+    const reward = attempt.rewardId
+      ? this.rewardService.getRewardById(attempt.rewardId)
+      : undefined;
+    const result: AttemptResult = attempt.result ?? 'void';
+
+    return {
+      attemptId: attempt.id,
+      status: 'resolved',
+      result,
+      reward: reward
+        ? {
+            id: reward.id,
+            code: reward.code,
+            rarity: reward.rarity,
+          }
+        : undefined,
+      seedReveal: attempt.seedReveal ?? undefined,
+      riskScore: attempt.riskScore,
+    };
+  }
+}
