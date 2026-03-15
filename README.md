@@ -32,11 +32,17 @@ Backend for a claw machine game where the server is authoritative for economy an
 - `AUTH_DISABLED` (`true/false`, default `false`) - bypass all `AuthGuard` checks (local dev only)
 - `AUTH_DISABLED_USER_ID` (default `noauth-user`) - forced user id when `AUTH_DISABLED=true`
 - `AUTH_DISABLED_TELEGRAM_USER_ID` (default `dev:noauth-user`) - forced telegram user id when `AUTH_DISABLED=true`
+- `AUTH_DISABLED_SKIP_TICKET_DEBIT` (`true/false`, default `true`) - do not spend tickets in no-auth mode
 - `ATTEMPT_TOKEN_SECRET`
 - `ATTEMPT_TTL_SEC` (default `300`)
 - `INPUT_RATE_LIMIT_PER_SEC` (default `30`)
 - `AUDIT_LOG_ENABLED` (`true/false`, default `true`)
 - `DEFAULT_TICKETS` (default `5`)
+- `ATTEMPT_RESULT_WEBHOOK_ENABLED` (`true/false`, default `true`)
+- `ATTEMPT_RESULT_WEBHOOK_URL` (default empty; set URL to receive `win/lose/void`)
+- `ATTEMPT_RESULT_WEBHOOK_TIMEOUT_MS` (default `1500`)
+- `ATTEMPT_RESULT_WEBHOOK_AUTH_TOKEN` (optional bearer token for webhook)
+- `ATTEMPT_RESULT_WEBHOOK_INCLUDE_SEED` (`true/false`, default `false`)
 
 ## Run
 
@@ -44,6 +50,8 @@ Backend for a claw machine game where the server is authoritative for economy an
 npm install
 npm run start:dev
 ```
+
+`.env` and `.env.example` are included in the project root.
 
 ## Tests
 
@@ -73,6 +81,11 @@ Only rewards seed:
 4. `POST /v1/attempts/:attemptId/inputs`
 5. `POST /v1/attempts/:attemptId/resolve`
 6. `POST /v1/rewards/claim`
+7. `POST /v1/debug/attempt-result` (local webhook receiver for resolve result)
+
+External webhook receiver docs:
+
+- `external-service/README.md`
 
 ## Notes
 

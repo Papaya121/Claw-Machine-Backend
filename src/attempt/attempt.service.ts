@@ -13,7 +13,7 @@ import type {
   AuthUserContext,
 } from '../common/domain.types';
 import { randomHex, sha256Hex } from '../common/crypto.util';
-import { getEnvInt } from '../common/env';
+import { getEnvBool, getEnvInt, getEnvString } from '../common/env';
 import { IdempotencyService } from '../common/idempotency.service';
 import { AuditService } from '../audit/audit.service';
 import { AntiCheatService } from '../anti-cheat/anti-cheat.service';
@@ -38,6 +38,26 @@ export class AttemptService {
   );
 
   private readonly attemptTtlSec = getEnvInt('ATTEMPT_TTL_SEC', 60 * 5);
+  private readonly attemptResultWebhookEnabled = getEnvBool(
+    'ATTEMPT_RESULT_WEBHOOK_ENABLED',
+    true,
+  );
+  private readonly attemptResultWebhookUrl = getEnvString(
+    'ATTEMPT_RESULT_WEBHOOK_URL',
+    '',
+  ).trim();
+  private readonly attemptResultWebhookTimeoutMs = getEnvInt(
+    'ATTEMPT_RESULT_WEBHOOK_TIMEOUT_MS',
+    1500,
+  );
+  private readonly attemptResultWebhookAuthToken = getEnvString(
+    'ATTEMPT_RESULT_WEBHOOK_AUTH_TOKEN',
+    '',
+  ).trim();
+  private readonly attemptResultWebhookIncludeSeed = getEnvBool(
+    'ATTEMPT_RESULT_WEBHOOK_INCLUDE_SEED',
+    false,
+  );
 
   constructor(
     private readonly db: InMemoryDatabaseService,
@@ -322,7 +342,9 @@ export class AttemptService {
           this.logger.log(
             `Resolve returned cached state attemptId=${attemptId} status=${attempt.status}`,
           );
-          return this.buildResolveResponse(attempt);
+          const response = this.buildResolveResponse(attempt);
+          this.dispatchAttemptResultWebhook(attempt, response, user.id);
+          return response;
         }
 
         if (Date.now() > attempt.expiresAt) {
@@ -335,7 +357,9 @@ export class AttemptService {
             seedReveal: randomHex(32),
           };
           this.db.attempts.set(expired.id, expired);
-          return this.buildResolveResponse(expired);
+          const response = this.buildResolveResponse(expired);
+          this.dispatchAttemptResultWebhook(expired, response, user.id);
+          return response;
         }
 
         const config = this.configService.get(attempt.configVersion);
@@ -432,7 +456,7 @@ export class AttemptService {
           attempt.id,
         );
 
-        return {
+        const response = {
           attemptId: resolved.id,
           status: 'resolved' as const,
           result: resolvedResult,
@@ -440,6 +464,8 @@ export class AttemptService {
           seedReveal: resolved.seedReveal ?? undefined,
           riskScore: resolved.riskScore,
         };
+        this.dispatchAttemptResultWebhook(resolved, response, user.id);
+        return response;
       },
     );
   }
@@ -486,5 +512,89 @@ export class AttemptService {
       seedReveal: attempt.seedReveal ?? undefined,
       riskScore: attempt.riskScore,
     };
+  }
+
+  private dispatchAttemptResultWebhook(
+    attempt: Attempt,
+    response: {
+      attemptId: string;
+      status: 'resolved';
+      result: AttemptResult;
+      reward?: { id: string; code: string; rarity: string };
+      seedReveal?: string;
+      riskScore: number;
+    },
+    userId: string,
+  ): void {
+    if (
+      !this.attemptResultWebhookEnabled ||
+      !this.attemptResultWebhookUrl.length
+    ) {
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      eventType: 'attempt.resolved',
+      attemptId: response.attemptId,
+      userId,
+      result: response.result,
+      status: response.status,
+      riskScore: response.riskScore,
+      reward: response.reward ?? null,
+      machineId: attempt.machineId,
+      configVersion: attempt.configVersion,
+      clientBuild: attempt.clientBuild,
+      startedAt: attempt.startedAt,
+      resolvedAt: attempt.resolvedAt,
+      serverNowMs: Date.now(),
+    };
+
+    if (this.attemptResultWebhookIncludeSeed) {
+      payload.seedReveal = response.seedReveal ?? null;
+    }
+
+    void this.sendAttemptResultWebhook(payload);
+  }
+
+  private async sendAttemptResultWebhook(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const timeoutMs = Math.max(100, this.attemptResultWebhookTimeoutMs);
+    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (this.attemptResultWebhookAuthToken.length > 0) {
+        headers.Authorization = `Bearer ${this.attemptResultWebhookAuthToken}`;
+      }
+
+      const response = await fetch(this.attemptResultWebhookUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        this.logger.warn(
+          `Attempt result webhook failed status=${response.status} body=${text || '<empty>'}`,
+        );
+        return;
+      }
+
+      this.logger.debug(
+        `Attempt result webhook sent status=${response.status} url=${this.attemptResultWebhookUrl}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? 'unknown');
+      this.logger.warn(`Attempt result webhook error: ${message}`);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 }

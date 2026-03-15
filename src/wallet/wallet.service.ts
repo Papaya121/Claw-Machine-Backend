@@ -1,11 +1,18 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import type { Wallet } from '../common/domain.types';
-import { getEnvInt } from '../common/env';
+import { getEnvBool, getEnvInt } from '../common/env';
 import { InMemoryDatabaseService } from '../storage/in-memory-database.service';
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
   private readonly initialTickets = getEnvInt('DEFAULT_TICKETS', 5);
+  private readonly authDisabled = getEnvBool('AUTH_DISABLED', false);
+  private readonly skipTicketDebitInNoAuth = getEnvBool(
+    'AUTH_DISABLED_SKIP_TICKET_DEBIT',
+    true,
+  );
+  private noAuthDebitBypassLogged = false;
 
   constructor(private readonly db: InMemoryDatabaseService) {}
 
@@ -28,6 +35,17 @@ export class WalletService {
 
   debitTicket(userId: string): Wallet {
     const wallet = this.getOrCreateWallet(userId);
+
+    if (this.authDisabled && this.skipTicketDebitInNoAuth) {
+      if (!this.noAuthDebitBypassLogged) {
+        this.logger.warn(
+          'AUTH_DISABLED=true and AUTH_DISABLED_SKIP_TICKET_DEBIT=true: ticket debit is bypassed',
+        );
+        this.noAuthDebitBypassLogged = true;
+      }
+      return wallet;
+    }
+
     if (wallet.tickets < 1) {
       throw new BadRequestException('Not enough tickets');
     }
