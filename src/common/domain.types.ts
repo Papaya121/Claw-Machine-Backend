@@ -52,8 +52,8 @@ export interface AttemptInput {
 export interface Reward {
   id: string;
   code: string;
-  rarity: string;
-  weight: number;
+  rarity: number;
+  chance: number;
   isActive: boolean;
   stock: number | null;
 }

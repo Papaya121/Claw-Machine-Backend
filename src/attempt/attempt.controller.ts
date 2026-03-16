@@ -67,6 +67,7 @@ export class AttemptController {
       clientSummary?: {
         pressTimeMs?: number;
         closeStartMs?: number;
+        localGrabObserved?: boolean;
         contactHints?: Array<{ toyHintId: string; fingers: number }>;
       };
     },

@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import type { Attempt, Reward, RewardGrant } from '../common/domain.types';
 import { IdempotencyService } from '../common/idempotency.service';
 import { AuditService } from '../audit/audit.service';
+import { GameSettingsService } from '../config/game-settings.service';
 import { InMemoryDatabaseService } from '../storage/in-memory-database.service';
 
 function clampStock(reward: Reward): Reward {
@@ -29,9 +30,10 @@ export class RewardService {
     private readonly db: InMemoryDatabaseService,
     private readonly idempotency: IdempotencyService,
     private readonly auditService: AuditService,
+    private readonly gameSettings: GameSettingsService,
   ) {
     if (this.db.rewards.size === 0) {
-      this.logger.log('Reward storage is empty, seeding default rewards');
+      this.logger.log('Reward storage is empty, seeding rewards from JSON');
       this.seedRewards();
     }
   }
@@ -48,40 +50,22 @@ export class RewardService {
 
   pickWeightedReward(random01: number): Reward {
     this.logger.debug(`Weighted reward pick started random01=${random01}`);
-    const active = [...this.db.rewards.values()].filter(
-      (reward) =>
-        reward.isActive && (reward.stock === null || reward.stock > 0),
-    );
-
-    if (active.length === 0) {
-      this.logger.error('Weighted reward pick failed: no active rewards');
-      throw new InternalServerErrorException('No active rewards configured');
+    const reward = this.pickWeightedFromActiveRewards(random01);
+    if (reward.stock !== null) {
+      this.db.rewards.set(
+        reward.id,
+        clampStock({ ...reward, stock: reward.stock - 1 }),
+      );
     }
-
-    const totalWeight = active.reduce((sum, reward) => sum + reward.weight, 0);
-    const target = random01 * totalWeight;
-    let cumulative = 0;
-
-    for (const reward of active) {
-      cumulative += reward.weight;
-      if (target <= cumulative) {
-        if (reward.stock !== null) {
-          this.db.rewards.set(
-            reward.id,
-            clampStock({ ...reward, stock: reward.stock - 1 }),
-          );
-        }
-        this.logger.log(
-          `Reward selected rewardId=${reward.id} code=${reward.code} rarity=${reward.rarity}`,
-        );
-        return reward;
-      }
-    }
-
-    this.logger.warn(
-      'Weighted pick reached fallback branch, selecting last reward',
+    this.logger.log(
+      `Reward selected rewardId=${reward.id} code=${reward.code} rarity=${reward.rarity}`,
     );
-    return active[active.length - 1];
+    return reward;
+  }
+
+  pickWeightedRewardForSpawn(random01: number): Reward {
+    this.logger.debug(`Spawn reward pick started random01=${random01}`);
+    return this.pickWeightedFromActiveRewards(random01);
   }
 
   ensureGrantForWin(attempt: Attempt, rewardId: string): RewardGrant {
@@ -130,7 +114,7 @@ export class RewardService {
     idempotencyKey: string,
   ): Promise<{
     status: 'granted' | 'already_granted' | 'pending' | 'failed';
-    reward?: { code: string; rarity: string };
+    reward?: { code: string; rarity: number };
   }> {
     this.logger.log(
       `Claim flow started userId=${userId} attemptId=${attemptId} idem=${idempotencyKey}`,
@@ -237,38 +221,7 @@ export class RewardService {
   }
 
   private seedRewards(): void {
-    const seeds: Array<
-      Pick<Reward, 'code' | 'rarity' | 'weight' | 'isActive' | 'stock'>
-    > = [
-      {
-        code: 'TOY_COMMON_BEAR',
-        rarity: 'common',
-        weight: 600,
-        isActive: true,
-        stock: null,
-      },
-      {
-        code: 'TOY_RARE_CAT',
-        rarity: 'rare',
-        weight: 250,
-        isActive: true,
-        stock: 1000,
-      },
-      {
-        code: 'TOY_EPIC_DINO',
-        rarity: 'epic',
-        weight: 120,
-        isActive: true,
-        stock: 350,
-      },
-      {
-        code: 'TOY_LEGENDARY_DRAGON',
-        rarity: 'legendary',
-        weight: 30,
-        isActive: true,
-        stock: 50,
-      },
-    ];
+    const seeds = this.gameSettings.getRewardConfigs();
 
     for (const seed of seeds) {
       const reward: Reward = {
@@ -282,5 +235,36 @@ export class RewardService {
       );
     }
     this.logger.log(`Seeded rewards count=${seeds.length}`);
+  }
+
+  private pickWeightedFromActiveRewards(random01: number): Reward {
+    const active = [...this.db.rewards.values()].filter(
+      (reward) =>
+        reward.isActive &&
+        reward.chance > 0 &&
+        (reward.stock === null || reward.stock > 0),
+    );
+
+    if (active.length === 0) {
+      this.logger.error('Weighted reward pick failed: no active rewards');
+      throw new InternalServerErrorException('No active rewards configured');
+    }
+
+    const totalChance = active.reduce((sum, reward) => sum + reward.chance, 0);
+    const clampedRandom = Math.max(0, Math.min(1, random01));
+    const target = clampedRandom * totalChance;
+    let cumulative = 0;
+
+    for (const reward of active) {
+      cumulative += reward.chance;
+      if (target <= cumulative) {
+        return reward;
+      }
+    }
+
+    this.logger.warn(
+      'Weighted pick reached fallback branch, selecting last reward',
+    );
+    return active[active.length - 1];
   }
 }

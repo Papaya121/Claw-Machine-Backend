@@ -289,6 +289,52 @@ export class AttemptService {
     };
   }
 
+  getMachineSpawnPlan(
+    user: AuthUserContext,
+    machineId: string,
+    body: {
+      count?: number;
+    },
+  ): {
+    machineId: string;
+    serverNowMs: number;
+    items: Array<{ toyId: string }>;
+  } {
+    const normalizedMachineId = (machineId ?? '').trim();
+    if (!normalizedMachineId) {
+      throw new BadRequestException('machineId is required');
+    }
+
+    const requestedCount = Number.isFinite(body?.count) ? (body.count ?? 0) : 0;
+    const count = clamp(Math.floor(requestedCount || 35), 1, 200);
+    const plannedItems: Array<{ toyId: string; rarity: number }> = [];
+
+    for (let i = 0; i < count; i++) {
+      const reward = this.rewardService.pickWeightedRewardForSpawn(
+        Math.random(),
+      );
+      plannedItems.push({ toyId: reward.code, rarity: reward.rarity });
+    }
+    plannedItems.sort((a, b) => b.rarity - a.rarity);
+    const items = plannedItems.map((item) => ({ toyId: item.toyId }));
+
+    this.auditService.log(
+      'machine.spawn_plan_issued',
+      {
+        machineId: normalizedMachineId,
+        count,
+      },
+      user.id,
+      undefined,
+    );
+
+    return {
+      machineId: normalizedMachineId,
+      serverNowMs: Date.now(),
+      items,
+    };
+  }
+
   async resolveAttempt(
     user: AuthUserContext,
     attemptId: string,
@@ -298,6 +344,7 @@ export class AttemptService {
       clientSummary?: {
         pressTimeMs?: number;
         closeStartMs?: number;
+        localGrabObserved?: boolean;
         contactHints?: Array<{ toyHintId: string; fingers: number }>;
       };
     },
@@ -305,7 +352,7 @@ export class AttemptService {
     attemptId: string;
     status: 'resolved';
     result: AttemptResult;
-    reward?: { id: string; code: string; rarity: string };
+    reward?: { id: string; code: string; rarity: number };
     seedReveal?: string;
     riskScore: number;
   }> {
@@ -370,6 +417,10 @@ export class AttemptService {
           pressTimeMs: summary.pressTimeMs ?? 0,
           closeStartMs: summary.closeStartMs,
         });
+        const localGrabObserved = summary.localGrabObserved === true;
+        const serverValidatedGrab =
+          replay.dropAlignment >= config.economy.grabValidationMinAlignment &&
+          replay.skillScore >= config.economy.grabValidationMinSkill;
 
         const recentAttempts = [...this.db.attempts.values()]
           .filter(
@@ -390,6 +441,14 @@ export class AttemptService {
           recentWinRate,
           lockedPhaseMovement: replay.lockedPhaseMovement,
         });
+        this.antiCheatService.applyResolveChecks(acc, attempt, {
+          localGrabObserved,
+          serverValidatedGrab,
+          dropAlignment: replay.dropAlignment,
+          skillScore: replay.skillScore,
+          pressTimeMs: summary.pressTimeMs ?? 0,
+          closeStartMs: summary.closeStartMs,
+        });
 
         const totalRisk = attempt.riskScore + acc.riskScore;
         const seedReveal = randomHex(32);
@@ -398,14 +457,15 @@ export class AttemptService {
           replay,
           seedReveal,
           totalRisk,
+          { localGrabObserved, serverValidatedGrab },
         );
         const resolvedResult: AttemptResult = outcome.result;
         this.logger.log(
-          `Resolve computed attemptId=${attemptId} result=${resolvedResult} riskScore=${totalRisk} chance=${outcome.chance}`,
+          `Resolve computed attemptId=${attemptId} result=${resolvedResult} reason=${outcome.outcomeReason} riskScore=${totalRisk} chance=${outcome.chance} dropChance=${outcome.dropChance}`,
         );
 
         let rewardPayload:
-          | { id: string; code: string; rarity: string }
+          | { id: string; code: string; rarity: number }
           | undefined;
         let rewardId: string | null = null;
 
@@ -449,6 +509,12 @@ export class AttemptService {
             riskScore: resolved.riskScore,
             chance: outcome.chance,
             rewardRoll: outcome.rewardRoll,
+            dropChance: outcome.dropChance,
+            dropRoll: outcome.dropRoll,
+            dropTriggered: outcome.dropTriggered,
+            outcomeReason: outcome.outcomeReason,
+            localGrabObserved,
+            serverValidatedGrab,
             rewardId: resolved.rewardId,
             replay,
           },
@@ -489,7 +555,7 @@ export class AttemptService {
     attemptId: string;
     status: 'resolved';
     result: AttemptResult;
-    reward?: { id: string; code: string; rarity: string };
+    reward?: { id: string; code: string; rarity: number };
     seedReveal?: string;
     riskScore: number;
   } {
@@ -520,7 +586,7 @@ export class AttemptService {
       attemptId: string;
       status: 'resolved';
       result: AttemptResult;
-      reward?: { id: string; code: string; rarity: string };
+      reward?: { id: string; code: string; rarity: number };
       seedReveal?: string;
       riskScore: number;
     },

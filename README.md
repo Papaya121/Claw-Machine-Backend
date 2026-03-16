@@ -7,6 +7,7 @@ Backend for a claw machine game where the server is authoritative for economy an
 - Telegram auth validation via `initData` signature check.
 - Access token + short-lived attempt token.
 - Attempt lifecycle:
+  - `POST /v1/machines/:machineId/spawn-plan`
   - `POST /v1/attempts/start`
   - `POST /v1/attempts/:attemptId/inputs`
   - `POST /v1/attempts/:attemptId/resolve`
@@ -36,6 +37,7 @@ Backend for a claw machine game where the server is authoritative for economy an
 - `ATTEMPT_TOKEN_SECRET`
 - `ATTEMPT_TTL_SEC` (default `300`)
 - `INPUT_RATE_LIMIT_PER_SEC` (default `30`)
+- `GAME_SETTINGS_PATH` (default `config/game-settings.json`) - path to unified JSON with machine + reward settings
 - `AUDIT_LOG_ENABLED` (`true/false`, default `true`)
 - `DEFAULT_TICKETS` (default `5`)
 - `ATTEMPT_RESULT_WEBHOOK_ENABLED` (`true/false`, default `true`)
@@ -78,10 +80,11 @@ Only rewards seed:
 1. `POST /v1/auth/telegram`
 2. `POST /v1/auth/dev` (for local dev without Telegram)
 3. `POST /v1/attempts/start`
-4. `POST /v1/attempts/:attemptId/inputs`
-5. `POST /v1/attempts/:attemptId/resolve`
-6. `POST /v1/rewards/claim`
-7. `POST /v1/debug/attempt-result` (local webhook receiver for resolve result)
+4. `POST /v1/machines/:machineId/spawn-plan`
+5. `POST /v1/attempts/:attemptId/inputs`
+6. `POST /v1/attempts/:attemptId/resolve`
+7. `POST /v1/rewards/claim`
+8. `POST /v1/debug/attempt-result` (local webhook receiver for resolve result)
 
 External webhook receiver docs:
 
@@ -90,8 +93,11 @@ External webhook receiver docs:
 ## Notes
 
 - Runtime storage in this MVP is in-memory (`InMemoryDatabaseService`).
+- All gameplay tuning is stored in one JSON file: [config/game-settings.json](config/game-settings.json).
+- In `rewards[]`: `rarity` is numeric `0..1` (used for spawn depth ordering, where `1` is lowest), `chance` controls reward/spawn probability, `stock` is quantity limit (not probability).
 - PostgreSQL schema is provided in `migrations/*.sql` and maps to the documented production model.
 - Local physics on client should be visual-only; server decides final result and reward durability.
+- Resolve flow is two-stage: validated grab check and then additional server-side drop roll (configured in `config/game-settings.json`).
 - Temporary no-auth mode for Mini App testing:
 
 ```bash

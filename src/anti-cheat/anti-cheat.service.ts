@@ -116,6 +116,38 @@ export class AntiCheatService {
     }
   }
 
+  applyResolveChecks(
+    acc: RiskAccumulator,
+    attempt: Attempt,
+    telemetry: {
+      localGrabObserved: boolean;
+      serverValidatedGrab: boolean;
+      dropAlignment: number;
+      skillScore: number;
+      pressTimeMs: number;
+      closeStartMs?: number;
+    },
+  ): void {
+    if (
+      telemetry.localGrabObserved &&
+      telemetry.closeStartMs !== undefined &&
+      telemetry.closeStartMs < telemetry.pressTimeMs
+    ) {
+      this.addFlag(acc, attempt, 'close_before_press', 10, {
+        pressTimeMs: telemetry.pressTimeMs,
+        closeStartMs: telemetry.closeStartMs,
+      });
+    }
+
+    if (telemetry.localGrabObserved && !telemetry.serverValidatedGrab) {
+      this.addFlag(acc, attempt, 'grab_claim_not_validated', 18, {
+        dropAlignment: Number(telemetry.dropAlignment.toFixed(4)),
+        skillScore: Number(telemetry.skillScore.toFixed(4)),
+      });
+      acc.warnings.push('Client grab claim not validated by server replay');
+    }
+  }
+
   persistFlags(acc: RiskAccumulator): void {
     for (const flag of acc.flags) {
       this.db.antiCheatFlags.push({

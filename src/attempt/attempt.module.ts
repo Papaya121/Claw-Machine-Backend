@@ -6,6 +6,7 @@ import { ConfigModule } from '../config/config.module';
 import { RewardModule } from '../reward/reward.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AttemptController } from './attempt.controller';
+import { MachineController } from './machine.controller';
 import { AttemptService } from './attempt.service';
 import { ReplayResolverService } from './replay-resolver.service';
 
@@ -18,7 +19,7 @@ import { ReplayResolverService } from './replay-resolver.service';
     AntiCheatModule,
     RewardModule,
   ],
-  controllers: [AttemptController],
+  controllers: [AttemptController, MachineController],
   providers: [AttemptService, ReplayResolverService],
 })
 export class AttemptModule {}

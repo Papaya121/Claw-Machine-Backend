@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import type { AttemptInput } from '../common/domain.types';
-import type { MachineConfig } from '../config/machine-config.service';
+import type { MachineConfig } from '../config/machine-config.types';
 
 export interface ReplayResult {
   dropAlignment: number;
@@ -17,6 +17,15 @@ export interface ResolveOutcome {
   result: 'win' | 'lose' | 'void';
   chance: number;
   rewardRoll: number;
+  dropChance: number;
+  dropRoll: number;
+  dropTriggered: boolean;
+  outcomeReason:
+    | 'void_risk'
+    | 'grab_not_validated'
+    | 'chance_roll_failed'
+    | 'dropped_after_grab'
+    | 'win';
   seedReveal: string;
   replay: ReplayResult;
 }
@@ -187,6 +196,10 @@ export class ReplayResolverService {
     replay: ReplayResult,
     seed: string,
     riskScore: number,
+    context: {
+      localGrabObserved: boolean;
+      serverValidatedGrab: boolean;
+    },
   ): ResolveOutcome {
     this.logger.debug(
       `Resolve outcome calc riskScore=${riskScore} skill=${replay.skillScore.toFixed(3)}`,
@@ -200,6 +213,8 @@ export class ReplayResolverService {
     );
 
     const rewardRoll = randomFromSeed(seed, 0);
+    const dropChance = clamp(config.economy.dropAfterGrabChance, 0, 1);
+    const dropRoll = randomFromSeed(seed, 2);
 
     if (riskScore >= config.economy.voidRiskThreshold) {
       this.logger.warn(
@@ -209,15 +224,66 @@ export class ReplayResolverService {
         result: 'void',
         chance,
         rewardRoll,
+        dropChance,
+        dropRoll,
+        dropTriggered: false,
+        outcomeReason: 'void_risk',
+        seedReveal: seed,
+        replay,
+      };
+    }
+
+    if (!context.localGrabObserved || !context.serverValidatedGrab) {
+      return {
+        result: 'lose',
+        chance,
+        rewardRoll,
+        dropChance,
+        dropRoll,
+        dropTriggered: false,
+        outcomeReason: 'grab_not_validated',
+        seedReveal: seed,
+        replay,
+      };
+    }
+
+    if (rewardRoll > chance) {
+      return {
+        result: 'lose',
+        chance,
+        rewardRoll,
+        dropChance,
+        dropRoll,
+        dropTriggered: false,
+        outcomeReason: 'chance_roll_failed',
+        seedReveal: seed,
+        replay,
+      };
+    }
+
+    const dropTriggered = dropRoll <= dropChance;
+    if (dropTriggered) {
+      return {
+        result: 'lose',
+        chance,
+        rewardRoll,
+        dropChance,
+        dropRoll,
+        dropTriggered: true,
+        outcomeReason: 'dropped_after_grab',
         seedReveal: seed,
         replay,
       };
     }
 
     return {
-      result: rewardRoll <= chance ? 'win' : 'lose',
+      result: 'win',
       chance,
       rewardRoll,
+      dropChance,
+      dropRoll,
+      dropTriggered: false,
+      outcomeReason: 'win',
       seedReveal: seed,
       replay,
     };

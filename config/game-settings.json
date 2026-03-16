@@ -1,0 +1,95 @@
+{
+  "machines": [
+    {
+      "version": "v1-default",
+      "inputWindowMs": 12000,
+      "dtMs": 20,
+      "movement": {
+        "minX": -1,
+        "maxX": 1,
+        "minY": -1,
+        "maxY": 1,
+        "maxSpeed": 1.6,
+        "acceleration": 6.5,
+        "damping": 3.2
+      },
+      "dropTarget": {
+        "x": 0,
+        "y": 0
+      },
+      "timing": {
+        "expectedPressMs": 3600,
+        "closeWindowMs": 700
+      },
+      "economy": {
+        "baseWinChance": 0.16,
+        "minChance": 0.04,
+        "maxChance": 0.4,
+        "skillScale": 0.22,
+        "riskScale": 0.012,
+        "voidRiskThreshold": 80,
+        "dropAfterGrabChance": 0.18,
+        "grabValidationMinAlignment": 0.35,
+        "grabValidationMinSkill": 0.25
+      }
+    }
+  ],
+  "rewards": [
+    {
+      "code": "bow_tie",
+      "rarity": 0.15,
+      "chance": 0.6,
+      "isActive": true,
+      "stock": null
+    },
+    {
+      "code": "button",
+      "rarity": 0.0,
+      "chance": 1.0,
+      "isActive": true,
+      "stock": 1000
+    },
+    {
+      "code": "sword",
+      "rarity": 0.75,
+      "chance": 0.12,
+      "isActive": true,
+      "stock": 350
+    },
+    {
+      "code": "pacifier",
+      "rarity": 1,
+      "chance": 0.03,
+      "isActive": true,
+      "stock": 50
+    },
+    {
+      "code": "heart",
+      "rarity": 1,
+      "chance": 0.03,
+      "isActive": true,
+      "stock": 50
+    },
+    {
+      "code": "bear",
+      "rarity": 1,
+      "chance": 0.03,
+      "isActive": true,
+      "stock": 50
+    },
+    {
+      "code": "potion",
+      "rarity": 1,
+      "chance": 0.03,
+      "isActive": true,
+      "stock": 50
+    },
+    {
+      "code": "cake",
+      "rarity": 1,
+      "chance": 0.03,
+      "isActive": true,
+      "stock": 50
+    }
+  ]
+}
