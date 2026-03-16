@@ -54,6 +54,7 @@ export interface Reward {
   code: string;
   rarity: number;
   chance: number;
+  weight: number;
   isActive: boolean;
   stock: number | null;
 }

@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Logger,
   Param,
@@ -22,15 +21,10 @@ export class MachineController {
   spawnPlan(
     @Param('machineId') machineId: string,
     @Req() req: AuthenticatedRequest,
-    @Body() body: { count?: number },
   ) {
     this.logger.log(
       `POST /v1/machines/${machineId}/spawn-plan userId=${req.authUser.id}`,
     );
-    return this.attemptService.getMachineSpawnPlan(
-      req.authUser,
-      machineId,
-      body ?? {},
-    );
+    return this.attemptService.getMachineSpawnPlan(req.authUser, machineId);
   }
 }

@@ -242,6 +242,7 @@ export class RewardService {
       (reward) =>
         reward.isActive &&
         reward.chance > 0 &&
+        reward.weight > 0 &&
         (reward.stock === null || reward.stock > 0),
     );
 
@@ -250,13 +251,16 @@ export class RewardService {
       throw new InternalServerErrorException('No active rewards configured');
     }
 
-    const totalChance = active.reduce((sum, reward) => sum + reward.chance, 0);
+    const totalChance = active.reduce(
+      (sum, reward) => sum + reward.chance * reward.weight,
+      0,
+    );
     const clampedRandom = Math.max(0, Math.min(1, random01));
     const target = clampedRandom * totalChance;
     let cumulative = 0;
 
     for (const reward of active) {
-      cumulative += reward.chance;
+      cumulative += reward.chance * reward.weight;
       if (target <= cumulative) {
         return reward;
       }

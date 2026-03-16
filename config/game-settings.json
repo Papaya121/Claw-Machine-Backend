@@ -1,4 +1,7 @@
 {
+  "spawnPlan": {
+    "itemCount": 35
+  },
   "machines": [
     {
       "version": "v1-default",
@@ -39,6 +42,7 @@
       "code": "bow_tie",
       "rarity": 0.15,
       "chance": 0.6,
+      "weight": 1,
       "isActive": true,
       "stock": null
     },
@@ -46,50 +50,57 @@
       "code": "button",
       "rarity": 0.0,
       "chance": 1.0,
+      "weight": 1,
       "isActive": true,
-      "stock": 1000
+      "stock": null
     },
     {
       "code": "sword",
       "rarity": 0.75,
       "chance": 0.12,
+      "weight": 1,
       "isActive": true,
-      "stock": 350
+      "stock": null
     },
     {
       "code": "pacifier",
       "rarity": 1,
       "chance": 0.03,
+      "weight": 1,
       "isActive": true,
-      "stock": 50
+      "stock": null
     },
     {
       "code": "heart",
       "rarity": 1,
       "chance": 0.03,
+      "weight": 1,
       "isActive": true,
-      "stock": 50
+      "stock": null
     },
     {
       "code": "bear",
       "rarity": 1,
       "chance": 0.03,
+      "weight": 1,
       "isActive": true,
-      "stock": 50
+      "stock": null
     },
     {
       "code": "potion",
       "rarity": 1,
       "chance": 0.03,
+      "weight": 1,
       "isActive": true,
-      "stock": 50
+      "stock": null
     },
     {
       "code": "cake",
       "rarity": 1,
       "chance": 0.03,
+      "weight": 1,
       "isActive": true,
-      "stock": 50
+      "stock": null
     }
   ]
 }

@@ -17,6 +17,7 @@ import { getEnvBool, getEnvInt, getEnvString } from '../common/env';
 import { IdempotencyService } from '../common/idempotency.service';
 import { AuditService } from '../audit/audit.service';
 import { AntiCheatService } from '../anti-cheat/anti-cheat.service';
+import { GameSettingsService } from '../config/game-settings.service';
 import { MachineConfigService } from '../config/machine-config.service';
 import { RewardService } from '../reward/reward.service';
 import { InMemoryDatabaseService } from '../storage/in-memory-database.service';
@@ -65,6 +66,7 @@ export class AttemptService {
     private readonly idempotency: IdempotencyService,
     private readonly tokenService: TokenService,
     private readonly configService: MachineConfigService,
+    private readonly gameSettingsService: GameSettingsService,
     private readonly auditService: AuditService,
     private readonly antiCheatService: AntiCheatService,
     private readonly replayResolver: ReplayResolverService,
@@ -292,9 +294,6 @@ export class AttemptService {
   getMachineSpawnPlan(
     user: AuthUserContext,
     machineId: string,
-    body: {
-      count?: number;
-    },
   ): {
     machineId: string;
     serverNowMs: number;
@@ -305,8 +304,7 @@ export class AttemptService {
       throw new BadRequestException('machineId is required');
     }
 
-    const requestedCount = Number.isFinite(body?.count) ? (body.count ?? 0) : 0;
-    const count = clamp(Math.floor(requestedCount || 35), 1, 200);
+    const count = this.gameSettingsService.getSpawnPlanConfig().itemCount;
     const plannedItems: Array<{ toyId: string; rarity: number }> = [];
 
     for (let i = 0; i < count; i++) {

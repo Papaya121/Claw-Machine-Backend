@@ -9,6 +9,7 @@ import { getEnvString } from '../common/env';
 import type {
   GameSettingsFile,
   RewardRuntimeConfig,
+  SpawnPlanRuntimeConfig,
 } from './game-settings.types';
 import type { MachineConfig } from './machine-config.types';
 
@@ -43,6 +44,10 @@ export class GameSettingsService {
 
   getRewardConfigs(): RewardRuntimeConfig[] {
     return this.settings.rewards.map((reward) => ({ ...reward }));
+  }
+
+  getSpawnPlanConfig(): SpawnPlanRuntimeConfig {
+    return { ...this.settings.spawnPlan };
   }
 
   private loadSettings(pathToFile: string): GameSettingsFile {
@@ -83,8 +88,11 @@ export class GameSettingsService {
     }
 
     const candidate = value as Partial<GameSettingsFile>;
+    const spawnPlan = candidate.spawnPlan;
     const machines = candidate.machines;
     const rewards = candidate.rewards;
+
+    this.validateSpawnPlan(spawnPlan);
 
     if (!Array.isArray(machines) || machines.length === 0) {
       throw new InternalServerErrorException(
@@ -106,10 +114,34 @@ export class GameSettingsService {
       this.validateReward(reward);
     }
 
+    const normalizedSpawnPlan = spawnPlan as SpawnPlanRuntimeConfig;
+    const normalizedMachines = machines;
+    const normalizedRewards = rewards;
+
     return {
-      machines: machines,
-      rewards: rewards,
+      spawnPlan: normalizedSpawnPlan,
+      machines: normalizedMachines,
+      rewards: normalizedRewards,
     };
+  }
+
+  private validateSpawnPlan(spawnPlan: unknown): void {
+    if (!spawnPlan || typeof spawnPlan !== 'object') {
+      throw new InternalServerErrorException(
+        'Game settings must include "spawnPlan" object.',
+      );
+    }
+
+    const value = spawnPlan as Partial<SpawnPlanRuntimeConfig>;
+    if (
+      !Number.isInteger(value.itemCount) ||
+      (value.itemCount ?? 0) < 1 ||
+      (value.itemCount ?? 0) > 200
+    ) {
+      throw new InternalServerErrorException(
+        'spawnPlan.itemCount must be an integer in range 1..200.',
+      );
+    }
   }
 
   private validateMachine(machine: unknown): void {
@@ -172,6 +204,12 @@ export class GameSettingsService {
     ) {
       throw new InternalServerErrorException(
         `Reward '${value.code}' has invalid chance.`,
+      );
+    }
+
+    if (!Number.isFinite(value.weight) || (value.weight ?? 0) < 0) {
+      throw new InternalServerErrorException(
+        `Reward '${value.code}' has invalid weight.`,
       );
     }
 
