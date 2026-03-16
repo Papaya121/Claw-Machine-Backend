@@ -17,14 +17,10 @@ export interface ResolveOutcome {
   result: 'win' | 'lose' | 'void';
   chance: number;
   rewardRoll: number;
-  dropChance: number;
-  dropRoll: number;
-  dropTriggered: boolean;
   outcomeReason:
     | 'void_risk'
     | 'grab_not_validated'
     | 'chance_roll_failed'
-    | 'dropped_after_grab'
     | 'win';
   seedReveal: string;
   replay: ReplayResult;
@@ -213,8 +209,6 @@ export class ReplayResolverService {
     );
 
     const rewardRoll = randomFromSeed(seed, 0);
-    const dropChance = clamp(config.economy.dropAfterGrabChance, 0, 1);
-    const dropRoll = randomFromSeed(seed, 2);
 
     if (riskScore >= config.economy.voidRiskThreshold) {
       this.logger.warn(
@@ -224,9 +218,6 @@ export class ReplayResolverService {
         result: 'void',
         chance,
         rewardRoll,
-        dropChance,
-        dropRoll,
-        dropTriggered: false,
         outcomeReason: 'void_risk',
         seedReveal: seed,
         replay,
@@ -238,9 +229,6 @@ export class ReplayResolverService {
         result: 'lose',
         chance,
         rewardRoll,
-        dropChance,
-        dropRoll,
-        dropTriggered: false,
         outcomeReason: 'grab_not_validated',
         seedReveal: seed,
         replay,
@@ -252,25 +240,7 @@ export class ReplayResolverService {
         result: 'lose',
         chance,
         rewardRoll,
-        dropChance,
-        dropRoll,
-        dropTriggered: false,
         outcomeReason: 'chance_roll_failed',
-        seedReveal: seed,
-        replay,
-      };
-    }
-
-    const dropTriggered = dropRoll <= dropChance;
-    if (dropTriggered) {
-      return {
-        result: 'lose',
-        chance,
-        rewardRoll,
-        dropChance,
-        dropRoll,
-        dropTriggered: true,
-        outcomeReason: 'dropped_after_grab',
         seedReveal: seed,
         replay,
       };
@@ -280,9 +250,6 @@ export class ReplayResolverService {
       result: 'win',
       chance,
       rewardRoll,
-      dropChance,
-      dropRoll,
-      dropTriggered: false,
       outcomeReason: 'win',
       seedReveal: seed,
       replay,
@@ -291,5 +258,9 @@ export class ReplayResolverService {
 
   randomForReward(seed: string): number {
     return randomFromSeed(seed, 1);
+  }
+
+  randomForDrop(seed: string): number {
+    return randomFromSeed(seed, 2);
   }
 }

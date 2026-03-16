@@ -95,10 +95,10 @@ External webhook receiver docs:
 - Runtime storage in this MVP is in-memory (`InMemoryDatabaseService`).
 - All gameplay tuning is stored in one JSON file: [config/game-settings.json](config/game-settings.json).
 - `spawnPlan.itemCount` controls how many toys are spawned for `/v1/machines/:machineId/spawn-plan` (server-side).
-- In `rewards[]`: `rarity` is numeric `0..1` (used for spawn depth ordering, where `1` is lowest), `chance` is a per-item probability factor, `weight` is an extra multiplier for weighted selection, `stock` is quantity limit (not probability).
+- In `rewards[]`: `rarity` is numeric `0..1` (used for spawn depth ordering, where `1` is lowest), `weight` controls reward/spawn weighted selection, `chance` is per-item drop probability after a successful grab, `stock` is quantity limit (not probability).
 - PostgreSQL schema is provided in `migrations/*.sql` and maps to the documented production model.
 - Local physics on client should be visual-only; server decides final result and reward durability.
-- Resolve flow is two-stage: validated grab check and then additional server-side drop roll (configured in `config/game-settings.json`).
+- Resolve flow is two-stage: validated grab check and then additional server-side drop roll using selected reward `chance`.
 - Temporary no-auth mode for Mini App testing:
 
 ```bash

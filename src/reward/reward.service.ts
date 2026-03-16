@@ -50,22 +50,30 @@ export class RewardService {
 
   pickWeightedReward(random01: number): Reward {
     this.logger.debug(`Weighted reward pick started random01=${random01}`);
-    const reward = this.pickWeightedFromActiveRewards(random01);
-    if (reward.stock !== null) {
-      this.db.rewards.set(
-        reward.id,
-        clampStock({ ...reward, stock: reward.stock - 1 }),
-      );
-    }
-    this.logger.log(
-      `Reward selected rewardId=${reward.id} code=${reward.code} rarity=${reward.rarity}`,
-    );
-    return reward;
+    return this.pickWeightedFromActiveRewards(random01);
   }
 
   pickWeightedRewardForSpawn(random01: number): Reward {
     this.logger.debug(`Spawn reward pick started random01=${random01}`);
     return this.pickWeightedFromActiveRewards(random01);
+  }
+
+  consumeStock(rewardId: string): void {
+    const reward = this.getRewardById(rewardId);
+    if (reward.stock === null) {
+      return;
+    }
+
+    if (reward.stock <= 0) {
+      throw new InternalServerErrorException(
+        `Reward '${reward.code}' stock exhausted.`,
+      );
+    }
+
+    this.db.rewards.set(
+      reward.id,
+      clampStock({ ...reward, stock: reward.stock - 1 }),
+    );
   }
 
   ensureGrantForWin(attempt: Attempt, rewardId: string): RewardGrant {
@@ -241,7 +249,6 @@ export class RewardService {
     const active = [...this.db.rewards.values()].filter(
       (reward) =>
         reward.isActive &&
-        reward.chance > 0 &&
         reward.weight > 0 &&
         (reward.stock === null || reward.stock > 0),
     );
@@ -251,16 +258,13 @@ export class RewardService {
       throw new InternalServerErrorException('No active rewards configured');
     }
 
-    const totalChance = active.reduce(
-      (sum, reward) => sum + reward.chance * reward.weight,
-      0,
-    );
+    const totalWeight = active.reduce((sum, reward) => sum + reward.weight, 0);
     const clampedRandom = Math.max(0, Math.min(1, random01));
-    const target = clampedRandom * totalChance;
+    const target = clampedRandom * totalWeight;
     let cumulative = 0;
 
     for (const reward of active) {
-      cumulative += reward.chance * reward.weight;
+      cumulative += reward.weight;
       if (target <= cumulative) {
         return reward;
       }

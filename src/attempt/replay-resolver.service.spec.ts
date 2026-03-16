@@ -32,7 +32,7 @@ describe('ReplayResolverService.resolveOutcome', () => {
       skillScale: 0,
       riskScale: 0,
       voidRiskThreshold: 80,
-      dropAfterGrabChance: 1,
+      dropAfterGrabChance: 0,
       grabValidationMinAlignment: 0.35,
       grabValidationMinSkill: 0.25,
     },
@@ -48,15 +48,14 @@ describe('ReplayResolverService.resolveOutcome', () => {
     lastPosition: { x: 0, y: 0 },
   };
 
-  it('returns lose when drop roll triggers after validated grab', () => {
+  it('returns win when grab is validated and chance check passes', () => {
     const outcome = resolver.resolveOutcome(config, replay, 'seed-a', 0, {
       localGrabObserved: true,
       serverValidatedGrab: true,
     });
 
-    expect(outcome.result).toBe('lose');
-    expect(outcome.outcomeReason).toBe('dropped_after_grab');
-    expect(outcome.dropTriggered).toBe(true);
+    expect(outcome.result).toBe('win');
+    expect(outcome.outcomeReason).toBe('win');
   });
 
   it('returns lose when grab is not validated even with high chance', () => {
@@ -67,6 +66,5 @@ describe('ReplayResolverService.resolveOutcome', () => {
 
     expect(outcome.result).toBe('lose');
     expect(outcome.outcomeReason).toBe('grab_not_validated');
-    expect(outcome.dropTriggered).toBe(false);
   });
 });

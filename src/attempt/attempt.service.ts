@@ -457,10 +457,16 @@ export class AttemptService {
           totalRisk,
           { localGrabObserved, serverValidatedGrab },
         );
-        const resolvedResult: AttemptResult = outcome.result;
-        this.logger.log(
-          `Resolve computed attemptId=${attemptId} result=${resolvedResult} reason=${outcome.outcomeReason} riskScore=${totalRisk} chance=${outcome.chance} dropChance=${outcome.dropChance}`,
-        );
+        let resolvedResult: AttemptResult = outcome.result;
+        let outcomeReason:
+          | 'void_risk'
+          | 'grab_not_validated'
+          | 'chance_roll_failed'
+          | 'dropped_after_grab'
+          | 'win' = outcome.outcomeReason;
+        let dropChance: number | null = null;
+        let dropRoll: number | null = null;
+        let dropTriggered = false;
 
         let rewardPayload:
           | { id: string; code: string; rarity: number }
@@ -471,17 +477,34 @@ export class AttemptService {
           const reward = this.rewardService.pickWeightedReward(
             this.replayResolver.randomForReward(seedReveal),
           );
-          rewardId = reward.id;
-          rewardPayload = {
-            id: reward.id,
-            code: reward.code,
-            rarity: reward.rarity,
-          };
-          this.rewardService.ensureGrantForWin(attempt, reward.id);
-          this.logger.log(
-            `Resolve produced win attemptId=${attemptId} rewardId=${reward.id}`,
-          );
+          dropChance = clamp(reward.chance, 0, 1);
+          dropRoll = this.replayResolver.randomForDrop(seedReveal);
+          dropTriggered = dropRoll <= dropChance;
+
+          if (dropTriggered) {
+            resolvedResult = 'lose';
+            outcomeReason = 'dropped_after_grab';
+            this.logger.log(
+              `Resolve dropped-after-grab attemptId=${attemptId} rewardCode=${reward.code} dropChance=${dropChance} dropRoll=${dropRoll}`,
+            );
+          } else {
+            rewardId = reward.id;
+            rewardPayload = {
+              id: reward.id,
+              code: reward.code,
+              rarity: reward.rarity,
+            };
+            this.rewardService.consumeStock(reward.id);
+            this.rewardService.ensureGrantForWin(attempt, reward.id);
+            this.logger.log(
+              `Resolve produced win attemptId=${attemptId} rewardId=${reward.id}`,
+            );
+          }
         }
+
+        this.logger.log(
+          `Resolve computed attemptId=${attemptId} result=${resolvedResult} reason=${outcomeReason} riskScore=${totalRisk} chance=${outcome.chance} dropChance=${dropChance ?? 'n/a'}`,
+        );
 
         const resolved: Attempt = {
           ...attempt,
@@ -507,10 +530,10 @@ export class AttemptService {
             riskScore: resolved.riskScore,
             chance: outcome.chance,
             rewardRoll: outcome.rewardRoll,
-            dropChance: outcome.dropChance,
-            dropRoll: outcome.dropRoll,
-            dropTriggered: outcome.dropTriggered,
-            outcomeReason: outcome.outcomeReason,
+            dropChance,
+            dropRoll,
+            dropTriggered,
+            outcomeReason,
             localGrabObserved,
             serverValidatedGrab,
             rewardId: resolved.rewardId,
