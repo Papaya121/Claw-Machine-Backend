@@ -4,6 +4,11 @@ export interface SpawnPlanRuntimeConfig {
   itemCount: number;
 }
 
+export interface SpawnOnWinToyRuntimeConfig {
+  toyId: string;
+  weight: number;
+}
+
 export interface RewardRuntimeConfig {
   code: string;
   rarity: number;
@@ -15,6 +20,7 @@ export interface RewardRuntimeConfig {
 
 export interface GameSettingsFile {
   spawnPlan: SpawnPlanRuntimeConfig;
+  spawnOnWinToys?: SpawnOnWinToyRuntimeConfig[] | null;
   machines: MachineConfig[];
   rewards: RewardRuntimeConfig[];
 }

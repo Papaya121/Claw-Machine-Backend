@@ -10,6 +10,7 @@ import type {
   GameSettingsFile,
   RewardRuntimeConfig,
   SpawnPlanRuntimeConfig,
+  SpawnOnWinToyRuntimeConfig,
 } from './game-settings.types';
 import type { MachineConfig } from './machine-config.types';
 
@@ -48,6 +49,12 @@ export class GameSettingsService {
 
   getSpawnPlanConfig(): SpawnPlanRuntimeConfig {
     return { ...this.settings.spawnPlan };
+  }
+
+  getSpawnOnWinToyConfigs(): SpawnOnWinToyRuntimeConfig[] {
+    return (this.settings.spawnOnWinToys ?? []).map((candidate) => ({
+      ...candidate,
+    }));
   }
 
   private loadSettings(pathToFile: string): GameSettingsFile {
@@ -89,10 +96,12 @@ export class GameSettingsService {
 
     const candidate = value as Partial<GameSettingsFile>;
     const spawnPlan = candidate.spawnPlan;
+    const spawnOnWinToys = candidate.spawnOnWinToys;
     const machines = candidate.machines;
     const rewards = candidate.rewards;
 
     this.validateSpawnPlan(spawnPlan);
+    this.validateSpawnOnWinToys('root', spawnOnWinToys);
 
     if (!Array.isArray(machines) || machines.length === 0) {
       throw new InternalServerErrorException(
@@ -120,6 +129,9 @@ export class GameSettingsService {
 
     return {
       spawnPlan: normalizedSpawnPlan,
+      spawnOnWinToys:
+        (spawnOnWinToys as SpawnOnWinToyRuntimeConfig[] | null | undefined) ??
+        [],
       machines: normalizedMachines,
       rewards: normalizedRewards,
     };
@@ -226,6 +238,43 @@ export class GameSettingsService {
       throw new InternalServerErrorException(
         `Reward '${value.code}' has invalid stock value.`,
       );
+    }
+
+  }
+
+  private validateSpawnOnWinToys(
+    rewardCode: string | undefined,
+    spawnOnWinToys: unknown,
+  ): void {
+    if (spawnOnWinToys === undefined || spawnOnWinToys === null) {
+      return;
+    }
+
+    if (!Array.isArray(spawnOnWinToys)) {
+      throw new InternalServerErrorException(
+        `Reward '${rewardCode}' has invalid spawnOnWinToys value.`,
+      );
+    }
+
+    for (const candidate of spawnOnWinToys) {
+      if (!candidate || typeof candidate !== 'object') {
+        throw new InternalServerErrorException(
+          `Reward '${rewardCode}' has invalid spawnOnWinToys entry.`,
+        );
+      }
+
+      const value = candidate as Partial<SpawnOnWinToyRuntimeConfig>;
+      if (!value.toyId || typeof value.toyId !== 'string') {
+        throw new InternalServerErrorException(
+          `Reward '${rewardCode}' has spawnOnWinToys entry without valid toyId.`,
+        );
+      }
+
+      if (!Number.isFinite(value.weight) || (value.weight ?? 0) < 0) {
+        throw new InternalServerErrorException(
+          `Reward '${rewardCode}' has spawnOnWinToys entry with invalid weight.`,
+        );
+      }
     }
   }
 }

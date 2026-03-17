@@ -207,4 +207,48 @@ describe('Claw Backend integration', () => {
       true,
     );
   });
+
+  it('resolve exposes weighted spawnOnWinToyId from global spawnOnWinToys config', async () => {
+    const user = auth('1006');
+    const start = await attemptService.startAttempt(user, randomUUID(), {
+      machineId: 'machine-a',
+      clientBuild: '1.0.0',
+      configVersion: 'v1-default',
+    });
+
+    const attempt = db.attempts.get(start.attemptId) as Attempt;
+    const configuredSpawnToys = gameSettingsService.getSpawnOnWinToyConfigs();
+    const spawnedReward = [...db.rewards.values()][0];
+
+    expect(configuredSpawnToys.length).toBeGreaterThan(0);
+    expect(spawnedReward).toBeDefined();
+    rewardService.ensureGrantForWin(attempt, spawnedReward.id);
+    db.attempts.set(attempt.id, {
+      ...attempt,
+      status: 'resolved',
+      result: 'win',
+      rewardId: spawnedReward.id,
+      seedReveal: 'forced-seed',
+      resolvedAt: Date.now(),
+    });
+
+    const response = await attemptService.resolveAttempt(
+      user,
+      attempt.id,
+      start.attemptToken,
+      randomUUID(),
+      {
+        clientSummary: {
+          pressTimeMs: 3200,
+        },
+      },
+    );
+
+    expect(response.result).toBe('win');
+    expect(
+      configuredSpawnToys.some(
+        (candidate) => candidate.toyId === response.spawnOnWinToyId,
+      ),
+    ).toBe(true);
+  });
 });

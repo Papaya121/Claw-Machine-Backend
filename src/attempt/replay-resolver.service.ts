@@ -263,4 +263,8 @@ export class ReplayResolverService {
   randomForDrop(seed: string): number {
     return randomFromSeed(seed, 2);
   }
+
+  randomForSpawnOnWin(seed: string): number {
+    return randomFromSeed(seed, 3);
+  }
 }

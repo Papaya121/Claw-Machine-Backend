@@ -58,6 +58,37 @@ export class RewardService {
     return this.pickWeightedFromActiveRewards(random01);
   }
 
+  pickSpawnOnWinToyId(random01: number): string | undefined {
+    const candidates = this.gameSettings.getSpawnOnWinToyConfigs().filter(
+      (candidate) =>
+        typeof candidate?.toyId === 'string' &&
+        candidate.toyId.trim().length > 0 &&
+        Number.isFinite(candidate.weight) &&
+        candidate.weight > 0,
+    );
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const totalWeight = candidates.reduce(
+      (sum, candidate) => sum + candidate.weight,
+      0,
+    );
+    const clampedRandom = Math.max(0, Math.min(1, random01));
+    const target = clampedRandom * totalWeight;
+    let cumulative = 0;
+
+    for (const candidate of candidates) {
+      cumulative += candidate.weight;
+      if (target <= cumulative) {
+        return candidate.toyId.trim();
+      }
+    }
+
+    return candidates[candidates.length - 1].toyId.trim();
+  }
+
   consumeStock(rewardId: string): void {
     const reward = this.getRewardById(rewardId);
     if (reward.stock === null) {

@@ -351,6 +351,7 @@ export class AttemptService {
     status: 'resolved';
     result: AttemptResult;
     reward?: { id: string; code: string; rarity: number };
+    spawnOnWinToyId?: string;
     seedReveal?: string;
     riskScore: number;
   }> {
@@ -471,6 +472,7 @@ export class AttemptService {
         let rewardPayload:
           | { id: string; code: string; rarity: number }
           | undefined;
+        let spawnOnWinToyId: string | undefined;
         let rewardId: string | null = null;
 
         if (outcome.result === 'win') {
@@ -494,6 +496,7 @@ export class AttemptService {
               code: reward.code,
               rarity: reward.rarity,
             };
+            spawnOnWinToyId = this.resolveSpawnOnWinToyId(seedReveal);
             this.rewardService.consumeStock(reward.id);
             this.rewardService.ensureGrantForWin(attempt, reward.id);
             this.logger.log(
@@ -548,6 +551,7 @@ export class AttemptService {
           status: 'resolved' as const,
           result: resolvedResult,
           reward: rewardPayload,
+          spawnOnWinToyId,
           seedReveal: resolved.seedReveal ?? undefined,
           riskScore: resolved.riskScore,
         };
@@ -577,6 +581,7 @@ export class AttemptService {
     status: 'resolved';
     result: AttemptResult;
     reward?: { id: string; code: string; rarity: number };
+    spawnOnWinToyId?: string;
     seedReveal?: string;
     riskScore: number;
   } {
@@ -596,6 +601,10 @@ export class AttemptService {
             rarity: reward.rarity,
           }
         : undefined,
+      spawnOnWinToyId:
+        result === 'win'
+          ? this.resolveSpawnOnWinToyId(attempt.seedReveal ?? attempt.id)
+          : undefined,
       seedReveal: attempt.seedReveal ?? undefined,
       riskScore: attempt.riskScore,
     };
@@ -608,6 +617,7 @@ export class AttemptService {
       status: 'resolved';
       result: AttemptResult;
       reward?: { id: string; code: string; rarity: number };
+      spawnOnWinToyId?: string;
       seedReveal?: string;
       riskScore: number;
     },
@@ -628,6 +638,7 @@ export class AttemptService {
       status: response.status,
       riskScore: response.riskScore,
       reward: response.reward ?? null,
+      spawnOnWinToyId: response.spawnOnWinToyId ?? null,
       machineId: attempt.machineId,
       configVersion: attempt.configVersion,
       clientBuild: attempt.clientBuild,
@@ -683,5 +694,17 @@ export class AttemptService {
     } finally {
       clearTimeout(timeoutHandle);
     }
+  }
+
+  private resolveSpawnOnWinToyId(
+    seed: string | null | undefined,
+  ): string | undefined {
+    const effectiveSeed =
+      typeof seed === 'string' && seed.trim().length > 0
+        ? seed
+        : randomUUID();
+    return this.rewardService.pickSpawnOnWinToyId(
+      this.replayResolver.randomForSpawnOnWin(effectiveSeed),
+    );
   }
 }

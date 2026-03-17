@@ -2,6 +2,12 @@
   "spawnPlan": {
     "itemCount": 100
   },
+  "spawnOnWinToys": [
+    { "toyId": "bear", "weight": 4 },
+    { "toyId": "sword", "weight": 3 },
+    { "toyId": "cake", "weight": 1 },
+    { "toyId": "heart", "weight": 1 }
+  ],
   "machines": [
     {
       "version": "v1-default",
