@@ -26,6 +26,7 @@ import { InMemoryDatabaseService } from '../storage/in-memory-database.service';
 import { TokenService } from '../auth/token.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ReplayResolverService } from './replay-resolver.service';
+import type { ReplayResult } from './replay-resolver.service';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -40,6 +41,31 @@ type ResolveResponse = {
   seedReveal?: string;
   riskScore: number;
   debug?: AttemptResolveDebug;
+};
+
+type PreviewResponse = {
+  attemptId: string;
+  status: 'preview';
+  predictedResultIfGrabbed: AttemptResult;
+  shouldDropOnGrab: boolean;
+  debug: AttemptResolveDebug;
+};
+
+type AntiCheatAccumulator = ReturnType<AntiCheatService['newAccumulator']>;
+
+type EvaluatedAttemptOutcome = {
+  acc: AntiCheatAccumulator;
+  replay: ReplayResult;
+  totalRisk: number;
+  resolvedResult: AttemptResult;
+  outcomeReason: AttemptOutcomeReason;
+  dropChance: number | null;
+  dropRoll: number | null;
+  dropTriggered: boolean;
+  rewardId: string | null;
+  rewardPayload?: { id: string; code: string; rarity: number };
+  spawnOnWinToyId?: string;
+  resolveDebug: AttemptResolveDebug;
 };
 
 @Injectable()
@@ -124,13 +150,14 @@ export class AttemptService {
         const config = this.configService.get(configVersion);
         const wallet = this.walletService.debitTicket(user.id);
 
-        const seedReveal = randomHex(32);
+        const outcomeSeed = randomHex(32);
         const attempt: Attempt = {
           id: randomUUID(),
           userId: user.id,
           status: 'started',
           configVersion,
-          seedHash: sha256Hex(seedReveal),
+          seedHash: sha256Hex(outcomeSeed),
+          outcomeSeed,
           seedReveal: null,
           startedAt: Date.now(),
           resolvedAt: null,
@@ -347,6 +374,59 @@ export class AttemptService {
     };
   }
 
+  previewAttemptIfGrabbed(
+    user: AuthUserContext,
+    attemptId: string,
+    attemptToken: string | undefined,
+    body: {
+      clientSummary?: {
+        pressTimeMs?: number;
+        closeStartMs?: number;
+        contactHints?: Array<{ toyHintId: string; fingers: number }>;
+      };
+    },
+  ): PreviewResponse {
+    this.logger.log(
+      `Preview requested userId=${user.id} attemptId=${attemptId}`,
+    );
+    if (!attemptToken) {
+      this.logger.warn(
+        `Preview rejected userId=${user.id} attemptId=${attemptId}: missing attempt token`,
+      );
+      throw new ForbiddenException('X-Attempt-Token header is required');
+    }
+
+    const summary = body.clientSummary;
+    if (!summary || !Number.isFinite(summary.pressTimeMs)) {
+      this.logger.warn(
+        `Preview rejected userId=${user.id} attemptId=${attemptId}: invalid clientSummary`,
+      );
+      throw new BadRequestException('clientSummary.pressTimeMs is required');
+    }
+
+    const attempt = this.getUserAttempt(user.id, attemptId);
+    this.tokenService.verifyAttemptToken(attemptToken, user.id, attemptId);
+
+    if (Date.now() > attempt.expiresAt) {
+      return {
+        attemptId: attempt.id,
+        status: 'preview',
+        predictedResultIfGrabbed: 'void',
+        shouldDropOnGrab: true,
+        debug: this.buildExpiredResolveDebug(true),
+      };
+    }
+
+    const evaluated = this.evaluateAttemptOutcome(attempt, summary, true);
+    return {
+      attemptId: attempt.id,
+      status: 'preview',
+      predictedResultIfGrabbed: evaluated.resolvedResult,
+      shouldDropOnGrab: evaluated.resolvedResult !== 'win',
+      debug: evaluated.resolveDebug,
+    };
+  }
+
   async resolveAttempt(
     user: AuthUserContext,
     attemptId: string,
@@ -406,24 +486,10 @@ export class AttemptService {
             status: 'cancelled' as const,
             result: 'void' as const,
             resolvedAt: Date.now(),
-            seedReveal: randomHex(32),
-            resolveDebug: {
-              outcomeReason: 'expired' as const,
-              chance: 0,
-              rewardRoll: 0,
-              dropChance: null,
-              dropRoll: null,
-              dropTriggered: false,
-              localGrabObserved: summary.localGrabObserved === true,
-              serverValidatedGrab: false,
-              replay: {
-                dropAlignment: 0,
-                stability: 0,
-                timingQuality: 0,
-                lockedPhaseMovement: false,
-                skillScore: 0,
-              },
-            },
+            seedReveal: attempt.outcomeSeed,
+            resolveDebug: this.buildExpiredResolveDebug(
+              summary.localGrabObserved === true,
+            ),
           };
           this.db.attempts.set(expired.id, expired);
           const response = this.buildResolveResponse(expired);
@@ -431,136 +497,50 @@ export class AttemptService {
           return response;
         }
 
-        const config = this.configService.get(attempt.configVersion);
-        const inputs = this.db.attemptInputs.get(attempt.id) || [];
-        const acc = this.antiCheatService.newAccumulator();
-
-        const replay = this.replayResolver.replay(config, inputs, {
-          pressTimeMs: summary.pressTimeMs ?? 0,
-          closeStartMs: summary.closeStartMs,
-        });
         const localGrabObserved = summary.localGrabObserved === true;
-        const serverValidatedGrab =
-          replay.dropAlignment >= config.economy.grabValidationMinAlignment &&
-          replay.skillScore >= config.economy.grabValidationMinSkill;
-
-        const recentAttempts = [...this.db.attempts.values()]
-          .filter(
-            (candidate) =>
-              candidate.userId === user.id && candidate.result !== null,
-          )
-          .sort((a, b) => b.startedAt - a.startedAt)
-          .slice(0, 20);
-
-        const wins = recentAttempts.filter(
-          (candidate) => candidate.result === 'win',
-        ).length;
-        const recentWinRate =
-          recentAttempts.length > 0 ? wins / recentAttempts.length : 0;
-
-        this.antiCheatService.applyBehaviorChecks(acc, attempt, {
-          repeatedPrecisionBin: replay.repeatedPrecisionBin,
-          recentWinRate,
-          lockedPhaseMovement: replay.lockedPhaseMovement,
-        });
-        this.antiCheatService.applyResolveChecks(acc, attempt, {
+        const evaluated = this.evaluateAttemptOutcome(
+          attempt,
+          summary,
           localGrabObserved,
-          serverValidatedGrab,
-          dropAlignment: replay.dropAlignment,
-          skillScore: replay.skillScore,
-          pressTimeMs: summary.pressTimeMs ?? 0,
-          closeStartMs: summary.closeStartMs,
-        });
-
-        const totalRisk = attempt.riskScore + acc.riskScore;
-        const seedReveal = randomHex(32);
-        const outcome = this.replayResolver.resolveOutcome(
-          config,
-          replay,
-          seedReveal,
-          totalRisk,
-          { localGrabObserved, serverValidatedGrab },
         );
-        let resolvedResult: AttemptResult = outcome.result;
-        let outcomeReason: AttemptOutcomeReason = outcome.outcomeReason;
-        let dropChance: number | null = null;
-        let dropRoll: number | null = null;
-        let dropTriggered = false;
+        const rewardPayload = evaluated.rewardPayload;
+        const spawnOnWinToyId = evaluated.spawnOnWinToyId;
+        const rewardId = evaluated.rewardId;
 
-        let rewardPayload:
-          | { id: string; code: string; rarity: number }
-          | undefined;
-        let spawnOnWinToyId: string | undefined;
-        let rewardId: string | null = null;
-
-        if (outcome.result === 'win') {
-          const reward = this.rewardService.pickWeightedReward(
-            this.replayResolver.randomForReward(seedReveal),
+        if (evaluated.resolvedResult === 'win' && rewardId) {
+          this.rewardService.consumeStock(rewardId);
+          this.rewardService.ensureGrantForWin(attempt, rewardId);
+          this.logger.log(
+            `Resolve produced win attemptId=${attemptId} rewardId=${rewardId}`,
           );
-          dropChance = clamp(reward.chance, 0, 1);
-          dropRoll = this.replayResolver.randomForDrop(seedReveal);
-          dropTriggered = dropRoll <= dropChance;
+        }
 
-          if (dropTriggered) {
-            resolvedResult = 'lose';
-            outcomeReason = 'dropped_after_grab';
-            this.logger.log(
-              `Resolve dropped-after-grab attemptId=${attemptId} rewardCode=${reward.code} dropChance=${dropChance} dropRoll=${dropRoll}`,
-            );
-          } else {
-            rewardId = reward.id;
-            rewardPayload = {
-              id: reward.id,
-              code: reward.code,
-              rarity: reward.rarity,
-            };
-            spawnOnWinToyId = this.resolveSpawnOnWinToyId(seedReveal);
-            this.rewardService.consumeStock(reward.id);
-            this.rewardService.ensureGrantForWin(attempt, reward.id);
-            this.logger.log(
-              `Resolve produced win attemptId=${attemptId} rewardId=${reward.id}`,
-            );
-          }
+        if (evaluated.dropTriggered && rewardPayload != null) {
+          this.logger.log(
+            `Resolve dropped-after-grab attemptId=${attemptId} rewardCode=${rewardPayload.code} dropChance=${evaluated.dropChance} dropRoll=${evaluated.dropRoll}`,
+          );
         }
 
         this.logger.log(
-          `Resolve computed attemptId=${attemptId} result=${resolvedResult} reason=${outcomeReason} riskScore=${totalRisk} chance=${outcome.chance} dropChance=${dropChance ?? 'n/a'}`,
+          `Resolve computed attemptId=${attemptId} result=${evaluated.resolvedResult} reason=${evaluated.outcomeReason} riskScore=${evaluated.totalRisk} chance=${evaluated.resolveDebug.chance} dropChance=${evaluated.dropChance ?? 'n/a'}`,
         );
-
-        const resolveDebug: AttemptResolveDebug = {
-          outcomeReason,
-          chance: outcome.chance,
-          rewardRoll: outcome.rewardRoll,
-          dropChance,
-          dropRoll,
-          dropTriggered,
-          localGrabObserved,
-          serverValidatedGrab,
-          replay: {
-            dropAlignment: replay.dropAlignment,
-            stability: replay.stability,
-            timingQuality: replay.timingQuality,
-            lockedPhaseMovement: replay.lockedPhaseMovement,
-            skillScore: replay.skillScore,
-          },
-        };
 
         const resolved: Attempt = {
           ...attempt,
           status: 'resolved',
-          riskScore: totalRisk,
+          riskScore: evaluated.totalRisk,
           resolvedAt: Date.now(),
-          result: resolvedResult,
+          result: evaluated.resolvedResult,
           rewardId,
-          seedReveal,
-          resolveDebug,
+          seedReveal: attempt.outcomeSeed,
+          resolveDebug: evaluated.resolveDebug,
         };
 
         this.db.attempts.set(attempt.id, resolved);
 
-        this.antiCheatService.persistFlags(acc);
+        this.antiCheatService.persistFlags(evaluated.acc);
         this.logger.debug(
-          `Resolve anti-cheat persisted attemptId=${attemptId} flags=${acc.flags.length}`,
+          `Resolve anti-cheat persisted attemptId=${attemptId} flags=${evaluated.acc.flags.length}`,
         );
 
         this.auditService.log(
@@ -568,16 +548,16 @@ export class AttemptService {
           {
             result: resolved.result,
             riskScore: resolved.riskScore,
-            chance: outcome.chance,
-            rewardRoll: outcome.rewardRoll,
-            dropChance,
-            dropRoll,
-            dropTriggered,
-            outcomeReason,
+            chance: evaluated.resolveDebug.chance,
+            rewardRoll: evaluated.resolveDebug.rewardRoll,
+            dropChance: evaluated.dropChance,
+            dropRoll: evaluated.dropRoll,
+            dropTriggered: evaluated.dropTriggered,
+            outcomeReason: evaluated.outcomeReason,
             localGrabObserved,
-            serverValidatedGrab,
+            serverValidatedGrab: evaluated.resolveDebug.serverValidatedGrab,
             rewardId: resolved.rewardId,
-            replay,
+            replay: evaluated.replay,
           },
           user.id,
           attempt.id,
@@ -586,17 +566,163 @@ export class AttemptService {
         const response = {
           attemptId: resolved.id,
           status: 'resolved' as const,
-          result: resolvedResult,
+          result: evaluated.resolvedResult,
           reward: rewardPayload,
           spawnOnWinToyId,
           seedReveal: resolved.seedReveal ?? undefined,
           riskScore: resolved.riskScore,
-          debug: resolveDebug,
+          debug: evaluated.resolveDebug,
         };
         this.dispatchAttemptResultWebhook(resolved, response, user.id);
         return response;
       },
     );
+  }
+
+  private buildExpiredResolveDebug(
+    localGrabObserved: boolean,
+  ): AttemptResolveDebug {
+    return {
+      outcomeReason: 'expired',
+      chance: 0,
+      rewardRoll: 0,
+      dropChance: null,
+      dropRoll: null,
+      dropTriggered: false,
+      localGrabObserved,
+      serverValidatedGrab: false,
+      replay: {
+        dropAlignment: 0,
+        stability: 0,
+        timingQuality: 0,
+        lockedPhaseMovement: false,
+        skillScore: 0,
+      },
+    };
+  }
+
+  private evaluateAttemptOutcome(
+    attempt: Attempt,
+    summary: {
+      pressTimeMs?: number;
+      closeStartMs?: number;
+      localGrabObserved?: boolean;
+      contactHints?: Array<{ toyHintId: string; fingers: number }>;
+    },
+    localGrabObserved: boolean,
+  ): EvaluatedAttemptOutcome {
+    const config = this.configService.get(attempt.configVersion);
+    const inputs = this.db.attemptInputs.get(attempt.id) || [];
+    const acc = this.antiCheatService.newAccumulator();
+    const replay = this.replayResolver.replay(config, inputs, {
+      pressTimeMs: summary.pressTimeMs ?? 0,
+      closeStartMs: summary.closeStartMs,
+    });
+    const serverValidatedGrab =
+      replay.dropAlignment >= config.economy.grabValidationMinAlignment &&
+      replay.skillScore >= config.economy.grabValidationMinSkill;
+
+    const recentAttempts = [...this.db.attempts.values()]
+      .filter(
+        (candidate) =>
+          candidate.userId === attempt.userId && candidate.result !== null,
+      )
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, 20);
+
+    const wins = recentAttempts.filter(
+      (candidate) => candidate.result === 'win',
+    ).length;
+    const recentWinRate =
+      recentAttempts.length > 0 ? wins / recentAttempts.length : 0;
+
+    this.antiCheatService.applyBehaviorChecks(acc, attempt, {
+      repeatedPrecisionBin: replay.repeatedPrecisionBin,
+      recentWinRate,
+      lockedPhaseMovement: replay.lockedPhaseMovement,
+    });
+    this.antiCheatService.applyResolveChecks(acc, attempt, {
+      localGrabObserved,
+      serverValidatedGrab,
+      dropAlignment: replay.dropAlignment,
+      skillScore: replay.skillScore,
+      pressTimeMs: summary.pressTimeMs ?? 0,
+      closeStartMs: summary.closeStartMs,
+    });
+
+    const totalRisk = attempt.riskScore + acc.riskScore;
+    const outcomeSeed = attempt.outcomeSeed;
+    const outcome = this.replayResolver.resolveOutcome(
+      config,
+      replay,
+      outcomeSeed,
+      totalRisk,
+      { localGrabObserved, serverValidatedGrab },
+    );
+
+    let resolvedResult: AttemptResult = outcome.result;
+    let outcomeReason: AttemptOutcomeReason = outcome.outcomeReason;
+    let dropChance: number | null = null;
+    let dropRoll: number | null = null;
+    let dropTriggered = false;
+    let rewardId: string | null = null;
+    let rewardPayload:
+      | { id: string; code: string; rarity: number }
+      | undefined;
+    let spawnOnWinToyId: string | undefined;
+
+    if (outcome.result === 'win') {
+      const reward = this.rewardService.pickWeightedReward(
+        this.replayResolver.randomForReward(outcomeSeed),
+      );
+      dropChance = clamp(reward.chance, 0, 1);
+      dropRoll = this.replayResolver.randomForDrop(outcomeSeed);
+      dropTriggered = dropRoll <= dropChance;
+
+      if (dropTriggered) {
+        resolvedResult = 'lose';
+        outcomeReason = 'dropped_after_grab';
+      } else {
+        rewardId = reward.id;
+        rewardPayload = {
+          id: reward.id,
+          code: reward.code,
+          rarity: reward.rarity,
+        };
+        spawnOnWinToyId = this.resolveSpawnOnWinToyId(outcomeSeed);
+      }
+    }
+
+    return {
+      acc,
+      replay,
+      totalRisk,
+      resolvedResult,
+      outcomeReason,
+      dropChance,
+      dropRoll,
+      dropTriggered,
+      rewardId,
+      rewardPayload,
+      spawnOnWinToyId,
+      resolveDebug: {
+        outcomeReason,
+        chance: outcome.chance,
+        rewardRoll: outcome.rewardRoll,
+        dropChance,
+        dropRoll,
+        dropTriggered,
+        localGrabObserved,
+        serverValidatedGrab,
+        replay: {
+          dropAlignment: replay.dropAlignment,
+          stability: replay.stability,
+          timingQuality: replay.timingQuality,
+          lockedPhaseMovement: replay.lockedPhaseMovement,
+          skillScore: replay.skillScore,
+        },
+      },
+    };
   }
 
   private getUserAttempt(userId: string, attemptId: string): Attempt {

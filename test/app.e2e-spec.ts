@@ -163,6 +163,55 @@ describe('Claw Backend integration', () => {
     expect(second).toEqual(first);
   });
 
+  it('preview-if-grabbed matches final resolve when local grab is observed', async () => {
+    const user = auth('1003-preview');
+    const start = await attemptService.startAttempt(user, randomUUID(), {
+      machineId: 'machine-a',
+      clientBuild: '1.0.0',
+      configVersion: 'v1-default',
+    });
+
+    const now = Date.now();
+    attemptService.ingestInputs(user, start.attemptId, start.attemptToken, {
+      packets: [
+        { seq: 1, clientTimeMs: now, moveX: 0.25, moveY: 0.1 },
+        { seq: 2, clientTimeMs: now + 20, moveX: 0.15, moveY: -0.05 },
+        { seq: 3, clientTimeMs: now + 40, moveX: 0, moveY: 0 },
+      ],
+    });
+
+    const preview = attemptService.previewAttemptIfGrabbed(
+      user,
+      start.attemptId,
+      start.attemptToken,
+      {
+        clientSummary: {
+          pressTimeMs: 3200,
+          closeStartMs: 3200,
+        },
+      },
+    );
+
+    const resolved = await attemptService.resolveAttempt(
+      user,
+      start.attemptId,
+      start.attemptToken,
+      randomUUID(),
+      {
+        clientSummary: {
+          pressTimeMs: 3200,
+          closeStartMs: 3200,
+          localGrabObserved: true,
+        },
+      },
+    );
+
+    expect(resolved.result).toBe(preview.predictedResultIfGrabbed);
+    expect(resolved.debug?.outcomeReason).toBe(preview.debug.outcomeReason);
+    expect(resolved.debug?.chance).toBe(preview.debug.chance);
+    expect(resolved.debug?.rewardRoll).toBe(preview.debug.rewardRoll);
+  });
+
   it('claim is idempotent', async () => {
     const user = auth('1004');
     const start = await attemptService.startAttempt(user, randomUUID(), {

@@ -56,6 +56,7 @@ export interface Attempt {
   status: AttemptStatus;
   configVersion: string;
   seedHash: string;
+  outcomeSeed: string;
   seedReveal: string | null;
   startedAt: number;
   resolvedAt: number | null;

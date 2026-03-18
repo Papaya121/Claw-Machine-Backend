@@ -83,4 +83,29 @@ export class AttemptController {
       body,
     );
   }
+
+  @Post(':attemptId/preview-if-grabbed')
+  previewIfGrabbed(
+    @Param('attemptId') attemptId: string,
+    @Req() req: AuthenticatedRequest,
+    @Headers('x-attempt-token') attemptToken: string | undefined,
+    @Body()
+    body: {
+      clientSummary?: {
+        pressTimeMs?: number;
+        closeStartMs?: number;
+        contactHints?: Array<{ toyHintId: string; fingers: number }>;
+      };
+    },
+  ) {
+    this.logger.log(
+      `POST /v1/attempts/${attemptId}/preview-if-grabbed userId=${req.authUser.id}`,
+    );
+    return this.attemptService.previewAttemptIfGrabbed(
+      req.authUser,
+      attemptId,
+      attemptToken,
+      body,
+    );
+  }
 }
