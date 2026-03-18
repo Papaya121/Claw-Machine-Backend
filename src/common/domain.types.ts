@@ -6,6 +6,33 @@ export type AttemptStatus =
   | 'cancelled';
 
 export type AttemptResult = 'win' | 'lose' | 'void';
+export type AttemptOutcomeReason =
+  | 'void_risk'
+  | 'grab_not_validated'
+  | 'chance_roll_failed'
+  | 'dropped_after_grab'
+  | 'win'
+  | 'expired';
+
+export interface AttemptReplayDebug {
+  dropAlignment: number;
+  stability: number;
+  timingQuality: number;
+  lockedPhaseMovement: boolean;
+  skillScore: number;
+}
+
+export interface AttemptResolveDebug {
+  outcomeReason: AttemptOutcomeReason;
+  chance: number;
+  rewardRoll: number;
+  dropChance: number | null;
+  dropRoll: number | null;
+  dropTriggered: boolean;
+  localGrabObserved: boolean;
+  serverValidatedGrab: boolean;
+  replay: AttemptReplayDebug;
+}
 
 export type RewardGrantStatus = 'pending' | 'granted' | 'failed';
 
@@ -36,6 +63,7 @@ export interface Attempt {
   riskScore: number;
   result: AttemptResult | null;
   rewardId: string | null;
+  resolveDebug: AttemptResolveDebug | null;
   machineId: string;
   clientBuild: string;
 }

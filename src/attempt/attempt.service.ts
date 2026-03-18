@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto';
 import type {
   Attempt,
   AttemptInput,
+  AttemptOutcomeReason,
+  AttemptResolveDebug,
   AttemptResult,
   AuthUserContext,
 } from '../common/domain.types';
@@ -28,6 +30,17 @@ import { ReplayResolverService } from './replay-resolver.service';
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+
+type ResolveResponse = {
+  attemptId: string;
+  status: 'resolved';
+  result: AttemptResult;
+  reward?: { id: string; code: string; rarity: number };
+  spawnOnWinToyId?: string;
+  seedReveal?: string;
+  riskScore: number;
+  debug?: AttemptResolveDebug;
+};
 
 @Injectable()
 export class AttemptService {
@@ -125,6 +138,7 @@ export class AttemptService {
           riskScore: 0,
           result: null,
           rewardId: null,
+          resolveDebug: null,
           machineId,
           clientBuild,
         };
@@ -346,15 +360,7 @@ export class AttemptService {
         contactHints?: Array<{ toyHintId: string; fingers: number }>;
       };
     },
-  ): Promise<{
-    attemptId: string;
-    status: 'resolved';
-    result: AttemptResult;
-    reward?: { id: string; code: string; rarity: number };
-    spawnOnWinToyId?: string;
-    seedReveal?: string;
-    riskScore: number;
-  }> {
+  ): Promise<ResolveResponse> {
     this.logger.log(
       `Resolve requested userId=${user.id} attemptId=${attemptId} idem=${idempotencyKey}`,
     );
@@ -401,6 +407,23 @@ export class AttemptService {
             result: 'void' as const,
             resolvedAt: Date.now(),
             seedReveal: randomHex(32),
+            resolveDebug: {
+              outcomeReason: 'expired' as const,
+              chance: 0,
+              rewardRoll: 0,
+              dropChance: null,
+              dropRoll: null,
+              dropTriggered: false,
+              localGrabObserved: summary.localGrabObserved === true,
+              serverValidatedGrab: false,
+              replay: {
+                dropAlignment: 0,
+                stability: 0,
+                timingQuality: 0,
+                lockedPhaseMovement: false,
+                skillScore: 0,
+              },
+            },
           };
           this.db.attempts.set(expired.id, expired);
           const response = this.buildResolveResponse(expired);
@@ -459,12 +482,7 @@ export class AttemptService {
           { localGrabObserved, serverValidatedGrab },
         );
         let resolvedResult: AttemptResult = outcome.result;
-        let outcomeReason:
-          | 'void_risk'
-          | 'grab_not_validated'
-          | 'chance_roll_failed'
-          | 'dropped_after_grab'
-          | 'win' = outcome.outcomeReason;
+        let outcomeReason: AttemptOutcomeReason = outcome.outcomeReason;
         let dropChance: number | null = null;
         let dropRoll: number | null = null;
         let dropTriggered = false;
@@ -509,6 +527,24 @@ export class AttemptService {
           `Resolve computed attemptId=${attemptId} result=${resolvedResult} reason=${outcomeReason} riskScore=${totalRisk} chance=${outcome.chance} dropChance=${dropChance ?? 'n/a'}`,
         );
 
+        const resolveDebug: AttemptResolveDebug = {
+          outcomeReason,
+          chance: outcome.chance,
+          rewardRoll: outcome.rewardRoll,
+          dropChance,
+          dropRoll,
+          dropTriggered,
+          localGrabObserved,
+          serverValidatedGrab,
+          replay: {
+            dropAlignment: replay.dropAlignment,
+            stability: replay.stability,
+            timingQuality: replay.timingQuality,
+            lockedPhaseMovement: replay.lockedPhaseMovement,
+            skillScore: replay.skillScore,
+          },
+        };
+
         const resolved: Attempt = {
           ...attempt,
           status: 'resolved',
@@ -517,6 +553,7 @@ export class AttemptService {
           result: resolvedResult,
           rewardId,
           seedReveal,
+          resolveDebug,
         };
 
         this.db.attempts.set(attempt.id, resolved);
@@ -554,6 +591,7 @@ export class AttemptService {
           spawnOnWinToyId,
           seedReveal: resolved.seedReveal ?? undefined,
           riskScore: resolved.riskScore,
+          debug: resolveDebug,
         };
         this.dispatchAttemptResultWebhook(resolved, response, user.id);
         return response;
@@ -576,15 +614,7 @@ export class AttemptService {
     return attempt;
   }
 
-  private buildResolveResponse(attempt: Attempt): {
-    attemptId: string;
-    status: 'resolved';
-    result: AttemptResult;
-    reward?: { id: string; code: string; rarity: number };
-    spawnOnWinToyId?: string;
-    seedReveal?: string;
-    riskScore: number;
-  } {
+  private buildResolveResponse(attempt: Attempt): ResolveResponse {
     const reward = attempt.rewardId
       ? this.rewardService.getRewardById(attempt.rewardId)
       : undefined;
@@ -607,6 +637,7 @@ export class AttemptService {
           : undefined,
       seedReveal: attempt.seedReveal ?? undefined,
       riskScore: attempt.riskScore,
+      debug: attempt.resolveDebug ?? undefined,
     };
   }
 
