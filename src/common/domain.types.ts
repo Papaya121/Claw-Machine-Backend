@@ -26,7 +26,7 @@ export interface AttemptResolveDebug {
   outcomeReason: AttemptOutcomeReason;
   chance: number;
   rewardRoll: number;
-  dropChance: number | null;
+  keepChance: number | null;
   dropRoll: number | null;
   dropTriggered: boolean;
   localGrabObserved: boolean;

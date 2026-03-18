@@ -59,7 +59,7 @@ type EvaluatedAttemptOutcome = {
   totalRisk: number;
   resolvedResult: AttemptResult;
   outcomeReason: AttemptOutcomeReason;
-  dropChance: number | null;
+  keepChance: number | null;
   dropRoll: number | null;
   dropTriggered: boolean;
   rewardId: string | null;
@@ -517,12 +517,12 @@ export class AttemptService {
 
         if (evaluated.dropTriggered && rewardPayload != null) {
           this.logger.log(
-            `Resolve dropped-after-grab attemptId=${attemptId} rewardCode=${rewardPayload.code} dropChance=${evaluated.dropChance} dropRoll=${evaluated.dropRoll}`,
+            `Resolve dropped-after-grab attemptId=${attemptId} rewardCode=${rewardPayload.code} keepChance=${evaluated.keepChance} dropRoll=${evaluated.dropRoll}`,
           );
         }
 
         this.logger.log(
-          `Resolve computed attemptId=${attemptId} result=${evaluated.resolvedResult} reason=${evaluated.outcomeReason} riskScore=${evaluated.totalRisk} chance=${evaluated.resolveDebug.chance} dropChance=${evaluated.dropChance ?? 'n/a'}`,
+          `Resolve computed attemptId=${attemptId} result=${evaluated.resolvedResult} reason=${evaluated.outcomeReason} riskScore=${evaluated.totalRisk} chance=${evaluated.resolveDebug.chance} keepChance=${evaluated.keepChance ?? 'n/a'}`,
         );
 
         const resolved: Attempt = {
@@ -550,7 +550,7 @@ export class AttemptService {
             riskScore: resolved.riskScore,
             chance: evaluated.resolveDebug.chance,
             rewardRoll: evaluated.resolveDebug.rewardRoll,
-            dropChance: evaluated.dropChance,
+            keepChance: evaluated.keepChance,
             dropRoll: evaluated.dropRoll,
             dropTriggered: evaluated.dropTriggered,
             outcomeReason: evaluated.outcomeReason,
@@ -586,7 +586,7 @@ export class AttemptService {
       outcomeReason: 'expired',
       chance: 0,
       rewardRoll: 0,
-      dropChance: null,
+      keepChance: null,
       dropRoll: null,
       dropTriggered: false,
       localGrabObserved,
@@ -662,7 +662,7 @@ export class AttemptService {
 
     let resolvedResult: AttemptResult = outcome.result;
     let outcomeReason: AttemptOutcomeReason = outcome.outcomeReason;
-    let dropChance: number | null = null;
+    let keepChance: number | null = null;
     let dropRoll: number | null = null;
     let dropTriggered = false;
     let rewardId: string | null = null;
@@ -675,9 +675,9 @@ export class AttemptService {
       const reward = this.rewardService.pickWeightedReward(
         this.replayResolver.randomForReward(outcomeSeed),
       );
-      dropChance = clamp(reward.chance, 0, 1);
+      keepChance = clamp(reward.chance, 0, 1);
       dropRoll = this.replayResolver.randomForDrop(outcomeSeed);
-      dropTriggered = dropRoll <= dropChance;
+      dropTriggered = dropRoll > keepChance;
 
       if (dropTriggered) {
         resolvedResult = 'lose';
@@ -699,7 +699,7 @@ export class AttemptService {
       totalRisk,
       resolvedResult,
       outcomeReason,
-      dropChance,
+      keepChance,
       dropRoll,
       dropTriggered,
       rewardId,
@@ -709,7 +709,7 @@ export class AttemptService {
         outcomeReason,
         chance: outcome.chance,
         rewardRoll: outcome.rewardRoll,
-        dropChance,
+        keepChance,
         dropRoll,
         dropTriggered,
         localGrabObserved,

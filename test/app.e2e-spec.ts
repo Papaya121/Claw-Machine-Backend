@@ -3,7 +3,11 @@ import { createHmac, randomUUID } from 'crypto';
 import { AppModule } from '../src/app.module';
 import { AttemptService } from '../src/attempt/attempt.service';
 import { AuthService } from '../src/auth/auth.service';
-import type { Attempt, AuthUserContext } from '../src/common/domain.types';
+import type {
+  Attempt,
+  AuthUserContext,
+  Reward,
+} from '../src/common/domain.types';
 import { GameSettingsService } from '../src/config/game-settings.service';
 import { InMemoryDatabaseService } from '../src/storage/in-memory-database.service';
 import { RewardService } from '../src/reward/reward.service';
@@ -210,6 +214,90 @@ describe('Claw Backend integration', () => {
     expect(resolved.debug?.outcomeReason).toBe(preview.debug.outcomeReason);
     expect(resolved.debug?.chance).toBe(preview.debug.chance);
     expect(resolved.debug?.rewardRoll).toBe(preview.debug.rewardRoll);
+  });
+
+  it('reward chance=1 keeps selected reward in claw', async () => {
+    const originalRewards = [...db.rewards.values()].map((reward) => ({
+      ...reward,
+    }));
+
+    try {
+      const buttonId = db.rewardsByCode.get('button');
+      expect(buttonId).toBeDefined();
+      const button = db.rewards.get(buttonId as string) as Reward;
+      expect(button).toBeDefined();
+
+      db.rewards.clear();
+      db.rewardsByCode.clear();
+
+      const onlyButton: Reward = {
+        ...button,
+        chance: 1,
+        weight: 1,
+        isActive: true,
+        stock: null,
+      };
+      db.rewards.set(onlyButton.id, onlyButton);
+      db.rewardsByCode.set(onlyButton.code, onlyButton.id);
+
+      let foundPredictedWin = false;
+
+      for (let i = 0; i < 25; i++) {
+        const user = auth(`button-keep-${i}`);
+        const start = await attemptService.startAttempt(user, randomUUID(), {
+          machineId: 'machine-a',
+          clientBuild: '1.0.0',
+          configVersion: 'v1-default',
+        });
+
+        const preview = attemptService.previewAttemptIfGrabbed(
+          user,
+          start.attemptId,
+          start.attemptToken,
+          {
+            clientSummary: {
+              pressTimeMs: 3600,
+              closeStartMs: 3600,
+            },
+          },
+        );
+
+        if (preview.predictedResultIfGrabbed !== 'win') {
+          continue;
+        }
+
+        foundPredictedWin = true;
+
+        const resolved = await attemptService.resolveAttempt(
+          user,
+          start.attemptId,
+          start.attemptToken,
+          randomUUID(),
+          {
+            clientSummary: {
+              pressTimeMs: 3600,
+              closeStartMs: 3600,
+              localGrabObserved: true,
+            },
+          },
+        );
+
+        expect(resolved.result).toBe('win');
+        expect(resolved.reward?.code).toBe('button');
+        expect(resolved.debug?.keepChance).toBe(1);
+        expect(resolved.debug?.dropTriggered).toBe(false);
+        break;
+      }
+
+      expect(foundPredictedWin).toBe(true);
+    } finally {
+      db.rewards.clear();
+      db.rewardsByCode.clear();
+      for (const reward of originalRewards) {
+        db.rewards.set(reward.id, reward);
+        db.rewardsByCode.set(reward.code, reward.id);
+      }
+    }
   });
 
   it('claim is idempotent', async () => {
