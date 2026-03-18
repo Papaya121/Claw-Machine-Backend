@@ -58,6 +58,29 @@ export class RewardService {
     return this.pickWeightedFromActiveRewards(random01);
   }
 
+  findActiveRewardByCode(rewardCode: string | null | undefined): Reward | null {
+    const normalizedCode = (rewardCode ?? '').trim();
+    if (!normalizedCode) {
+      return null;
+    }
+
+    const normalizedLower = normalizedCode.toLowerCase();
+    const active = [...this.db.rewards.values()].filter(
+      (reward) =>
+        reward.isActive &&
+        reward.weight > 0 &&
+        (reward.stock === null || reward.stock > 0),
+    );
+
+    for (const reward of active) {
+      if (reward.code.trim().toLowerCase() === normalizedLower) {
+        return reward;
+      }
+    }
+
+    return null;
+  }
+
   pickSpawnOnWinToyId(random01: number): string | undefined {
     const candidates = this.gameSettings.getSpawnOnWinToyConfigs().filter(
       (candidate) =>

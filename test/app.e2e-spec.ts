@@ -300,6 +300,57 @@ describe('Claw Backend integration', () => {
     }
   });
 
+  it('contact hint reward selection keeps preview and resolve on grabbed toy', async () => {
+    const user = auth('hinted-button');
+    const start = await attemptService.startAttempt(user, randomUUID(), {
+      machineId: 'machine-a',
+      clientBuild: '1.0.0',
+      configVersion: 'v1-default',
+    });
+
+    attemptService.ingestInputs(user, start.attemptId, start.attemptToken, {
+      packets: [
+        { seq: 1, clientTimeMs: Date.now(), moveX: 0, moveY: 0 },
+        { seq: 2, clientTimeMs: Date.now() + 20, moveX: 0, moveY: 0 },
+      ],
+    });
+
+    const preview = attemptService.previewAttemptIfGrabbed(
+      user,
+      start.attemptId,
+      start.attemptToken,
+      {
+        clientSummary: {
+          pressTimeMs: 3600,
+          closeStartMs: 3600,
+          contactHints: [{ toyHintId: 'button', fingers: 3 }],
+        },
+      },
+    );
+
+    expect(preview.debug.selectedRewardCode).toBe('button');
+
+    const resolved = await attemptService.resolveAttempt(
+      user,
+      start.attemptId,
+      start.attemptToken,
+      randomUUID(),
+      {
+        clientSummary: {
+          pressTimeMs: 3600,
+          closeStartMs: 3600,
+          localGrabObserved: true,
+          contactHints: [{ toyHintId: 'button', fingers: 3 }],
+        },
+      },
+    );
+
+    expect(resolved.debug?.selectedRewardCode).toBe('button');
+    if (resolved.result === 'win') {
+      expect(resolved.reward?.code).toBe('button');
+    }
+  });
+
   it('claim is idempotent', async () => {
     const user = auth('1004');
     const start = await attemptService.startAttempt(user, randomUUID(), {

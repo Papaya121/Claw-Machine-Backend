@@ -13,6 +13,7 @@ import type {
   AttemptResolveDebug,
   AttemptResult,
   AuthUserContext,
+  Reward,
 } from '../common/domain.types';
 import { randomHex, sha256Hex } from '../common/crypto.util';
 import { getEnvBool, getEnvInt, getEnvString } from '../common/env';
@@ -674,9 +675,11 @@ export class AttemptService {
     let spawnOnWinToyId: string | undefined;
 
     if (outcome.result === 'win') {
-      const reward = this.rewardService.pickWeightedReward(
-        this.replayResolver.randomForReward(outcomeSeed),
-      );
+      const reward =
+        this.resolveRewardFromContactHints(summary.contactHints) ??
+        this.rewardService.pickWeightedReward(
+          this.replayResolver.randomForReward(outcomeSeed),
+        );
       selectedRewardCode = reward.code;
       keepChance = clamp(reward.chance, 0, 1);
       dropRoll = this.replayResolver.randomForDrop(outcomeSeed);
@@ -727,6 +730,43 @@ export class AttemptService {
         },
       },
     };
+  }
+
+  private resolveRewardFromContactHints(
+    contactHints:
+      | Array<{ toyHintId: string; fingers: number }>
+      | undefined,
+  ): Reward | null {
+    if (!Array.isArray(contactHints) || contactHints.length === 0) {
+      return null;
+    }
+
+    const normalizedHints = contactHints
+      .map((hint) => ({
+        toyHintId: (hint?.toyHintId ?? '').trim(),
+        fingers: Number.isFinite(hint?.fingers) ? hint.fingers : 0,
+      }))
+      .filter((hint) => hint.toyHintId.length > 0)
+      .sort((left, right) => right.fingers - left.fingers);
+
+    for (const hint of normalizedHints) {
+      const hintedReward = this.rewardService.findActiveRewardByCode(
+        hint.toyHintId,
+      );
+      if (hintedReward) {
+        this.logger.debug(
+          `Resolved reward from contact hint toyHintId=${hint.toyHintId} fingers=${hint.fingers}`,
+        );
+        return hintedReward;
+      }
+    }
+
+    this.logger.warn(
+      `Contact hints provided but no active reward matched toyIds=${normalizedHints
+        .map((hint) => hint.toyHintId)
+        .join(',')}`,
+    );
+    return null;
   }
 
   private getUserAttempt(userId: string, attemptId: string): Attempt {
