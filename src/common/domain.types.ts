@@ -26,6 +26,7 @@ export interface AttemptResolveDebug {
   outcomeReason: AttemptOutcomeReason;
   chance: number;
   rewardRoll: number;
+  selectedRewardCode: string | null;
   keepChance: number | null;
   dropRoll: number | null;
   dropTriggered: boolean;

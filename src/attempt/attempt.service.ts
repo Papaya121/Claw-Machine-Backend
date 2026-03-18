@@ -586,6 +586,7 @@ export class AttemptService {
       outcomeReason: 'expired',
       chance: 0,
       rewardRoll: 0,
+      selectedRewardCode: null,
       keepChance: null,
       dropRoll: null,
       dropTriggered: false,
@@ -666,6 +667,7 @@ export class AttemptService {
     let dropRoll: number | null = null;
     let dropTriggered = false;
     let rewardId: string | null = null;
+    let selectedRewardCode: string | null = null;
     let rewardPayload:
       | { id: string; code: string; rarity: number }
       | undefined;
@@ -675,6 +677,7 @@ export class AttemptService {
       const reward = this.rewardService.pickWeightedReward(
         this.replayResolver.randomForReward(outcomeSeed),
       );
+      selectedRewardCode = reward.code;
       keepChance = clamp(reward.chance, 0, 1);
       dropRoll = this.replayResolver.randomForDrop(outcomeSeed);
       dropTriggered = dropRoll > keepChance;
@@ -709,6 +712,7 @@ export class AttemptService {
         outcomeReason,
         chance: outcome.chance,
         rewardRoll: outcome.rewardRoll,
+        selectedRewardCode,
         keepChance,
         dropRoll,
         dropTriggered,
