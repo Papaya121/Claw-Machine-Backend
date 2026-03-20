@@ -48,7 +48,7 @@
       "code": "bow_tie",
       "rarity": 0.15,
       "chance": 0.6,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -56,7 +56,7 @@
       "code": "button",
       "rarity": 0.0,
       "chance": 1.0,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -64,7 +64,7 @@
       "code": "ufc",
       "rarity": 0.3,
       "chance": 0.5,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -72,7 +72,7 @@
       "code": "tamagoche",
       "rarity": 0.3,
       "chance": 0.5,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -88,7 +88,7 @@
       "code": "pacifier",
       "rarity": 1,
       "chance": 0.03,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -96,7 +96,7 @@
       "code": "heart",
       "rarity": 1,
       "chance": 0.03,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -104,7 +104,7 @@
       "code": "bear",
       "rarity": 1,
       "chance": 0.03,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -112,7 +112,7 @@
       "code": "potion",
       "rarity": 1,
       "chance": 0.03,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     },
@@ -120,7 +120,7 @@
       "code": "cake",
       "rarity": 1,
       "chance": 0.03,
-      "weight": 1,
+      "weight": 3,
       "isActive": true,
       "stock": null
     }
