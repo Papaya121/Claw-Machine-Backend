@@ -61,6 +61,22 @@
       "stock": null
     },
     {
+      "code": "ufc",
+      "rarity": 0.3,
+      "chance": 0.5,
+      "weight": 1,
+      "isActive": true,
+      "stock": null
+    },
+    {
+      "code": "tamagoche",
+      "rarity": 0.3,
+      "chance": 0.5,
+      "weight": 1,
+      "isActive": true,
+      "stock": null
+    },
+    {
       "code": "sword",
       "rarity": 0.75,
       "chance": 0.12,
